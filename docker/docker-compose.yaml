@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  research-agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8501:8501"
+    environment:
+      - LLM_BASE_URL=http://ollama:11434
+      - PYTHONPATH=/app
+    volumes:
+      - ../data:/app/data
+      - ../embeddings:/app/embeddings
+      - ../reports/output:/app/reports/output
+      - ../logs:/app/logs
+    depends_on:
+      - ollama
+    networks:
+      - research-network
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - research-network
+    command: ollama serve
+
+volumes:
+  ollama-data:
+  redis-data:
+
+networks:
+  research-network:
+    driver: bridge

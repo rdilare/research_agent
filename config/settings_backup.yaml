@@ -1,0 +1,58 @@
+# Application Settings
+app:
+  name: "Research Assistant Agent"
+  version: "1.0.0"
+  debug: false
+
+# LLM Configuration
+llm:
+  provider: "ollama"
+  model: "llama3.2"
+  base_url: "http://localhost:11434"
+  temperature: 0.7
+  max_tokens: 2048
+
+# Vector Store Configuration
+vector_store:
+  type: "faiss"
+  embedding_model: "all-MiniLM-L6-v2"
+  index_path: "embeddings/faiss_index"
+  chunk_size: 512
+  chunk_overlap: 50
+
+# Data Sources
+data_sources:
+  arxiv:
+    enabled: true
+    max_results: 5
+  
+  duckduckgo:
+    enabled: true
+    max_results: 3
+    region: "us-en"
+    safesearch: "moderate"
+    extract_full_content: true
+    content_timeout: 10
+    max_content_length: 5000
+    # Content extraction preferences (in order of preference)
+    extraction_methods: ["trafilatura", "newspaper3k", "beautifulsoup"]
+    min_content_length: 200  # Minimum content length to consider extraction successful
+    content_cleaning: true   # Enable aggressive content cleaning
+
+# Cache Configuration
+cache:
+  type: "file"  # file or redis
+  ttl: 3600  # seconds
+  max_size: 1000  # MB
+
+# Report Generation
+reports:
+  output_dir: "reports/output"
+  template_dir: "reports/templates"
+  formats: ["markdown", "pdf"]
+
+# Logging
+logging:
+  level: "INFO"
+  format: "json"
+  file: "logs/app.log"

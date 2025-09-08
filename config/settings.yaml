@@ -23,7 +23,7 @@ data_sources:
 # Logging Configuration
 logging:
   level: "INFO"
-  debug_mode: false
+  debug_mode: true
   step_logging: true
   
 # Retrieval Configuration

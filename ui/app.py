@@ -372,7 +372,7 @@ def main():
         
         # Research parameters
         st.write("**Parameters**")
-        max_sources = st.slider("Max Sources", 5, 50, 20)
+        max_sources = st.slider("Max Sources", 5, 50, 10)
         temperature = st.slider("LLM Temperature", 0.0, 1.0, 0.7)
         
         st.markdown("---")

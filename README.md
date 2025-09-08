@@ -43,20 +43,11 @@ The system uses standard LangChain/LangGraph patterns:
 
 ### Workflow
 
-1. **analyze_query** - LLM-based query analysis using ChatPromptTemplate
+1. **analyze_query** - LLM-based query analysis
 2. **retrieve_documents** - ArxivRetriever + DuckDuckGoSearchResults
 3. **process_with_rag** - FAISS vectorstore + standard RAG chain
 4. **generate_report** - Markdown report generation
 
-### Standard Components Used
-
-- `langchain_community.retrievers.ArxivRetriever`
-- `langchain_community.tools.DuckDuckGoSearchResults`
-- `langchain_community.vectorstores.FAISS`
-- `langchain_community.embeddings.HuggingFaceEmbeddings`
-- `langchain_ollama.OllamaLLM`
-- `langchain_core.prompts.ChatPromptTemplate`
-- `langgraph.graph.StateGraph`
 
 ### Configuration
 

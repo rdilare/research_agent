@@ -59,7 +59,7 @@ class ResearchAgentGraph:
         
         # Standard LangChain retrievers and tools
         self.arxiv_retriever = ArxivRetriever(load_max_docs=5)
-        self.web_search_tool = DuckDuckGoSearchResults(max_results=5)
+        self.web_search_tool = DuckDuckGoSearchResults(max_results=5, output_format="list")
         
         # Initialize vector store (will be populated during retrieval)
         self.vector_store = None
@@ -79,16 +79,27 @@ class ResearchAgentGraph:
             Analyze this research query and determine:
             1. Research domain (academic, market, technology, general)
             2. Key entities and topics
-            3. Required data sources
+            3. Required data sources: "web", or "academic" or both.
             4. Search strategy
             
             Query: {query}
             
-            Respond with a JSON object containing: domain, entities, topics, sources, strategy
+            Respond only with a JSON object containing: domain, entities, topics, sources, strategy
+            like:
+            {{
+                    "domain": "general",
+                    "entities": ['the user query'],
+                    "topics": ['dog,' 'cat', ],
+                    "sources": ["web", "academic"],
+                    "strategy": "broad search"
+                }}
             """)
             
             chain = analysis_prompt | self.llm | StrOutputParser()
             result = chain.invoke({"query": query})
+
+            dec = "\n"+("="*10)+"\n"
+            print(dec, result, dec)
             
             # Parse the analysis result
             try:
@@ -126,7 +137,8 @@ class ResearchAgentGraph:
             documents = []
             
             # Use ArxivRetriever for academic queries
-            if "academic" in analysis.get("sources", []) or analysis.get("domain") == "academic":
+            if False:
+            # if "academic" in analysis.get("sources", []) or analysis.get("domain") == "academic":
                 try:
                     arxiv_docs = self.arxiv_retriever.get_relevant_documents(query)
                     for doc in arxiv_docs[:3]:  # Limit results
@@ -143,7 +155,11 @@ class ResearchAgentGraph:
             # Use web search tool for general/market queries
             if "web" in analysis.get("sources", []) or analysis.get("domain") in ["market", "general"]:
                 try:
-                    web_results = self.web_search_tool.run(query)
+                    web_results = self.web_search_tool.invoke(query)
+                    print("\n"+"="*10)
+                    print(type(web_results))
+                    print(web_results)
+                    print("\n"+"="*10)
                     if isinstance(web_results, list):
                         for result in web_results[:3]:  # Limit results
                             documents.append({
@@ -338,6 +354,10 @@ class ResearchAgentGraph:
             
             # Execute the graph
             result = self.graph.invoke(initial_state)
+
+            with open("debug_log", "w") as f:
+                f.write(str(result))
+                # f.write(json.dumps(result, indent=2))
             
             logger.info(f"Research workflow completed for query: {query}")
             return result

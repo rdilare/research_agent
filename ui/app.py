@@ -39,7 +39,7 @@ def load_config():
 def blinking_text(text, should_blink=True):
     
     html_code = f"""
-    <span style="font-size:14px; color: grey; font-weight: normal; animation: blinker 1s linear infinite;">
+    <span style="font-size:14px; color: grey; font-weight: normal; animation: blinker 1.5s step-start infinite;">
         {text}
     </span>
     <style>
@@ -188,7 +188,7 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded"
     )
-    
+
     # Configure logging
     debug_mode = configure_logging()
     
@@ -266,6 +266,7 @@ def main():
     # Main content area
     st.title("Research Assistant Agent")
     st.markdown("*Comprehensive research across all domains with AI-powered analysis*")
+
     
     # Query input
     st.subheader("Research Query")
@@ -302,13 +303,19 @@ def conduct_research(query: str, config: Dict[str, Any]):
         # Show progress
         progress_bar = st.progress(0)
         status_text = st.empty()
+
+        status_handler = {
+            "status_container": status_text,
+            "progress_bar": progress_bar,
+            "blinking_text": blinking_text
+        }
         
         status_text.html(blinking_text("Initializing research agent..."))
         progress_bar.progress(10)
         
         # Initialize research agent
-        agent = ResearchAgentGraph(config)
-        
+        agent = ResearchAgentGraph(config, status_handler=status_handler)
+
         status_text.html(blinking_text("Analyzing query..."))
         progress_bar.progress(20)
         
@@ -393,6 +400,10 @@ def display_results(results):
 
 def generate_report(results):
     """Generate markdown formatted report"""
+
+    if results.get("generated_report"):
+        return results["generated_report"]
+
     try:
         # Build markdown report
         report_parts = []

@@ -3,7 +3,6 @@ Streamlit UI for Research Assistant Agent using Standard LangChain/LangGraph
 """
 import streamlit as st
 import logging
-import json
 import yaml
 import os
 from datetime import datetime
@@ -37,162 +36,20 @@ def load_config():
         }
 
 
-def display_results(results: Dict[str, Any]):
-    """Display research results in a simple format"""
-    try:
-        # Main research report
-        st.subheader("📋 Research Report")
-        
-        if results.get('markdown_report'):
-            st.markdown(results['markdown_report'])
-            
-            # Download button
-            st.download_button(
-                label="📥 Download Report (Markdown)",
-                data=results['markdown_report'],
-                file_name=f"research_report_{results.get('timestamp', 'unknown')}.md",
-                mime="text/markdown",
-                help="Download the complete research report in Markdown format"
-            )
-        
-        elif results.get('generated_text'):
-            st.markdown(results['generated_text'])
-        else:
-            st.warning("Research analysis not available")
-        
-        # Debug information in collapsed section
-        if results.get('step_logs'):
-            with st.expander("🐛 Debug Information", expanded=False):
-                display_debug_info(results)
-        
-    except Exception as e:
-        st.error(f"Failed to display results: {str(e)}")
-        logger.error(f"Display results error: {e}")
-
-
-def display_debug_info(results: Dict[str, Any]):
-    """Display debug information"""
-    st.subheader("Debug Information")
+def blinking_text(text, should_blink=True):
     
-    # Step logs
-    if results.get('step_logs'):
-        st.write("**Execution Steps:**")
-        for step_log in results['step_logs']:
-            with st.expander(f"📋 {step_log['step']} - {step_log.get('status', 'unknown').upper()}", expanded=False):
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    st.metric("Execution Time", f"{step_log.get('execution_time', 0):.2f}s")
-                
-                with col2:
-                    st.write(f"**Status:** {step_log.get('status', 'unknown')}")
-                
-                if step_log.get('input_summary'):
-                    st.write("**Input Summary:**")
-                    st.text(step_log['input_summary'])
-                
-                if step_log.get('output_summary'):
-                    st.write("**Output Summary:**")
-                    st.text(step_log['output_summary'])
-    
-    # Execution times
-    if results.get('execution_times'):
-        st.write("**Execution Times:**")
-        for step, time_val in results['execution_times'].items():
-            st.write(f"- {step}: {time_val:.2f}s")
-    
-    # Raw results
-    with st.expander("Raw Results", expanded=False):
-        st.code(str(results), language='json')
-
-
-def main():
-    """Main Streamlit application using standard LangGraph"""
-    st.set_page_config(
-        page_title="Research Assistant Agent",
-        page_icon="🔬",
-        layout="wide"
-    )
-    
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Load configuration
-    config = load_config()
-    
-    # Initialize session state
-    if 'current_results' not in st.session_state:
-        st.session_state.current_results = None
-    
-    # Main interface
-    st.title("🔬 Research Assistant Agent")
-    st.markdown("*Powered by Standard LangChain & LangGraph Components*")
-    
-    # Query input
-    st.subheader("Research Query")
-    user_query = st.text_area(
-        "Enter your research question:",
-        placeholder="e.g., What are the latest developments in artificial intelligence?",
-        height=100
-    )
-    
-    # Research button
-    if st.button("🚀 Start Research", type="primary", disabled=not user_query.strip()):
-        if user_query.strip():
-            conduct_research(user_query, config)
-    
-    # Display results
-    if st.session_state.current_results:
-        display_results(st.session_state.current_results)
-
-
-def conduct_research(query: str, config: Dict[str, Any]):
-    """Conduct research using standard LangGraph agent"""
-    try:
-        # Show progress
-        progress_bar = st.progress(0)
-        status_text = st.empty()
+    html_code = f"""
+    <span style="font-size:14px; color: grey; font-weight: normal; animation: blinker 1.5s step-start infinite;">
+        {text}
+    </span>
+    <style>
+    @keyframes blinker {{
+        20% {{ opacity: 0; }}
+    }}
+    </style>
+    """
         
-        status_text.text("Initializing LangGraph agent...")
-        progress_bar.progress(25)
-        
-        # Initialize the standard LangGraph agent
-        agent = ResearchAgentGraph(config)
-        
-        status_text.text("Running research workflow...")
-        progress_bar.progress(50)
-        
-        # Execute the workflow
-        results = agent.run(query)
-        
-        progress_bar.progress(100)
-        status_text.text("Research completed!")
-        
-        # Store results
-        st.session_state.current_results = results
-        
-        # Clear progress indicators
-        progress_bar.empty()
-        status_text.empty()
-        
-        # Auto-rerun to show results
-        st.rerun()
-        
-    except Exception as e:
-        st.error(f"Research failed: {str(e)}")
-        logger.error(f"Research error: {e}")
-        
-        # Clear progress indicators
-        progress_bar.empty()
-        status_text.empty()
-
-
-if __name__ == "__main__":
-    main()
-
+    return html_code
 
 def display_debug_info(results):
     """Display detailed debug information"""
@@ -331,7 +188,7 @@ def main():
         layout="wide",
         initial_sidebar_state="expanded"
     )
-    
+
     # Configure logging
     debug_mode = configure_logging()
     
@@ -347,7 +204,7 @@ def main():
     
     # Sidebar
     with st.sidebar:
-        st.title("🔬 Research Assistant")
+        st.title("Research Assistant")
         st.markdown("---")
         
         # Configuration options
@@ -372,7 +229,7 @@ def main():
         
         # Research parameters
         st.write("**Parameters**")
-        max_sources = st.slider("Max Sources", 5, 50, 20)
+        max_sources = st.slider("Max Sources", 5, 50, 10)
         temperature = st.slider("LLM Temperature", 0.0, 1.0, 0.7)
         
         st.markdown("---")
@@ -407,8 +264,9 @@ def main():
             st.rerun()
     
     # Main content area
-    st.title("🔬 Research Assistant Agent")
+    st.title("Research Assistant Agent")
     st.markdown("*Comprehensive research across all domains with AI-powered analysis*")
+
     
     # Query input
     st.subheader("Research Query")
@@ -445,30 +303,36 @@ def conduct_research(query: str, config: Dict[str, Any]):
         # Show progress
         progress_bar = st.progress(0)
         status_text = st.empty()
+
+        status_handler = {
+            "status_container": status_text,
+            "progress_bar": progress_bar,
+            "blinking_text": blinking_text
+        }
         
-        status_text.text("Initializing research agent...")
+        status_text.html(blinking_text("Initializing research agent..."))
         progress_bar.progress(10)
         
         # Initialize research agent
-        agent = ResearchAgentGraph(config)
-        
-        status_text.text("Analyzing query...")
+        agent = ResearchAgentGraph(config, status_handler=status_handler)
+
+        status_text.html(blinking_text("Analyzing query..."))
         progress_bar.progress(20)
         
         # Run research workflow
-        status_text.text("Retrieving data from sources...")
+        status_text.html(blinking_text("Retrieving data from sources..."))
         progress_bar.progress(40)
         
         results = agent.run(query)
         
-        status_text.text("Processing and analyzing data...")
+        status_text.html(blinking_text("Processing and analyzing data..."))
         progress_bar.progress(70)
         
-        status_text.text("Generating insights...")
+        status_text.html(blinking_text("Generating insights..."))
         progress_bar.progress(90)
         
         # Generate the markdown report
-        status_text.text("Preparing report...")
+        status_text.html(blinking_text("Preparing report..."))
         progress_bar.progress(95)
         
         # Store results
@@ -536,6 +400,10 @@ def display_results(results):
 
 def generate_report(results):
     """Generate markdown formatted report"""
+
+    if results.get("generated_report"):
+        return results["generated_report"]
+
     try:
         # Build markdown report
         report_parts = []

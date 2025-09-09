@@ -34,6 +34,8 @@ class AgentState(TypedDict):
     generated_text: str
     markdown_report: str
     timestamp: str
+    report_plan: Dict[str, Any]
+    generated_report: str
     errors: List[str]
     
     # Execution tracking
@@ -44,9 +46,12 @@ class AgentState(TypedDict):
 class ResearchAgentGraph:
     """Standard LangGraph-based research agent workflow"""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(self, config: Dict[str, Any], status_handler=None):
         self.config = config
-        
+        self.status_handler = status_handler
+        self.progress_max_count = 8  # Default max count for status bar
+        self.progress_counter = 0
+
         # Initialize standard LangChain components
         self.llm = Ollama(
             model=config.get('llm', {}).get('model', 'llama3.2'),
@@ -59,14 +64,32 @@ class ResearchAgentGraph:
         
         # Standard LangChain retrievers and tools
         self.arxiv_retriever = ArxivRetriever(load_max_docs=5)
-        self.web_search_tool = DuckDuckGoSearchResults(max_results=5)
+        self.web_search_tool = DuckDuckGoSearchResults(max_results=5, output_format="list")
         
         # Initialize vector store (will be populated during retrieval)
         self.vector_store = None
         
         # Build the workflow graph
         self.graph = self._build_graph()
-    
+
+    def set_status_handler(self, status_handler):
+        """Set or update the status handler for UI updates"""
+        self.status_handler = status_handler
+
+    def update_status(self, message: str, restart_counter: bool = False):
+        if restart_counter:
+            self.progress_counter = 0
+        self.progress_counter += 1
+        if "progress_bar" in self.status_handler:
+            self.status_handler["progress_bar"].progress(int((self.progress_counter / self.progress_max_count) * 100))
+
+        """Update status in the UI if status_handler is provided"""
+        if "status_container" in self.status_handler:
+            if "blinking_text" in self.status_handler:
+                self.status_handler["status_container"].html(self.status_handler["blinking_text"](message))
+            else:
+                self.status_handler["status_container"].text(message)
+
     def analyze_query(self, state: AgentState) -> AgentState:
         """Analyze user query using standard LangChain prompt template"""
         start_time = time.time()
@@ -79,16 +102,27 @@ class ResearchAgentGraph:
             Analyze this research query and determine:
             1. Research domain (academic, market, technology, general)
             2. Key entities and topics
-            3. Required data sources
+            3. Required data sources: "web", or "academic" or both.
             4. Search strategy
             
             Query: {query}
             
-            Respond with a JSON object containing: domain, entities, topics, sources, strategy
+            Respond only with a JSON object containing: domain, entities, topics, sources, strategy
+            like:
+            {{
+                    "domain": "general",
+                    "entities": ['the user query'],
+                    "topics": ['dog,' 'cat', ],
+                    "sources": ["web", "academic"],
+                    "strategy": "broad search"
+                }}
             """)
             
             chain = analysis_prompt | self.llm | StrOutputParser()
             result = chain.invoke({"query": query})
+
+            dec = "\n"+("="*10)+"\n"
+            print(dec, result, dec)
             
             # Parse the analysis result
             try:
@@ -116,6 +150,147 @@ class ResearchAgentGraph:
         
         return state
     
+    def report_planner(self, state: AgentState) -> AgentState:
+        """Plan the report structure"""
+
+        self.update_status("Planning report structure...", restart_counter=True)
+
+        web_snippets = []
+        context = ""
+        query = state["messages"][-1].content if state["messages"] else state.get("original_query", "")
+
+        try:
+            self.update_status("Fetching web results for report planning...")
+            web_results = self.web_search_tool.run(query)
+            for result in web_results:  # Limit results
+                web_snippets.append(result.get("snippet", ""))
+
+            context = "\n\n".join(web_snippets)
+
+            temp_dec = "\n"+("="*20)+"\n"
+            # print("Web results for report planning")
+            # print(temp_dec, context, temp_dec)
+
+        except Exception as e:
+            logger.warning(f"Web search for report planning failed: {e}")
+
+        try:
+
+            analysis_prompt = ChatPromptTemplate.from_template(
+                """
+                You are a research planner. Based on the user's research query, generate a structured outline for a research report.  
+                - The report should contain 5-8 sections, beginning with an Introduction and ending with a Conclusion.  
+                - For each section, create 2-4 focused sub-queries that are *explicitly and directly* connected to the research query, 
+                to guide information gathering.
+                - each sub-query should be complete on its own and related to the research query.
+                - Use both the provided context and your own knowledge to ensure comprehensive coverage of the topic.
+
+                context: {context}
+                
+                Research Query: {query}
+
+                Respond only with a JSON object containing: report_sections, and no other explanation. JSON object should be
+                wrapped inside multiline python string. it should not be wrapped inside triple backticks or any other markdown syntax.
+                like:
+                {{
+                    "report_sections": [
+                        {{
+                            "title": "Section 1 Title",
+                            "sub_queries": [
+                                "Sub-query 1",
+                                "Sub-query 2"
+                            ]
+                        }},
+                        {{
+                            "title": "Section 2 Title",
+                            "sub_queries": [
+                                "Sub-query 1",
+                                "Sub-query 2"
+                            ]
+                        }}
+                    ]
+                }}
+                """
+            )
+            self.update_status("Planning report sections...")
+            chain = analysis_prompt | self.llm | StrOutputParser()
+            result = chain.invoke({"context": context, "query": query})
+            try:
+                # print("report planning result: ", result)
+                plan = json.loads(result)
+                # print("plan: ", plan)
+                state["report_plan"] = plan
+            except json.JSONDecodeError:
+                print("Report planning result is not valid JSON")
+                state["report_plan"] = {"report_sections": []}
+
+            logger.info("Report planning completed (placeholder)")
+        except Exception as e:
+            error_msg = f"Report planning failed: {str(e)}"
+            logger.error(error_msg)
+            print(error_msg)
+            state["errors"].append(error_msg)
+        return state
+    
+    def report_generator(self, state: AgentState) -> AgentState:
+        """Generate the report based on the plan"""
+        # Placeholder implementation
+        self.update_status("Generating report...")  
+        try:
+            plan = state.get("report_plan", {})
+            report_sections = plan.get("report_sections", [])
+            report_title = state.get("original_query", "Research Report")
+            report_content = ""
+            self.progress_max_count += len(report_sections)
+            for section in report_sections:
+                title = section.get("title", "Untitled Section")
+                report_content += f"### {title}\n\n"
+                combined_snippets = ""
+                self.update_status(f"Generating content for section: {title}")
+                for sub_query in section.get("sub_queries", []):
+                    try:
+                        # Use web search tool to fetch content for the sub-query
+                        web_results = self.web_search_tool.run(sub_query)
+                        snippets = [result.get("snippet", "") for result in web_results]  # Collect top 3 snippets
+                        combined_snippets = "\n".join(snippets)
+                    except Exception as e:
+                        logger.warning(f"Web search failed for sub-query '{sub_query}': {e}")
+
+                # summarize the snippets using LLM   
+                try:
+                    # Use LLM to generate content based on the combined snippets
+                    content_prompt = ChatPromptTemplate.from_template(
+                        """
+                    Based on the following snippets, generate a detailed and coherent section-content for the below
+                    section-heading and research-topic. the content should be comprehensive and informative. the content should be 
+                    200-300 words long, written in natural language, and in paragraph form.
+
+                    Snippets:
+                    {snippets}
+
+                    Section-heading: {section_heading}
+                    Research-topic: {topic}
+
+                    Respond with the generated content for this section and do not add the section-heading.
+                    """)
+                    chain = content_prompt | self.llm | StrOutputParser()
+                    section_content = chain.invoke({"snippets": combined_snippets, "section_heading": title, "topic": report_title})
+                    report_content += f"{section_content}\n"
+                except Exception as e:
+                    logger.warning(f"LLM content generation failed for this section: '{title}': {e}")
+                    report_content += f"  - Error generating content for this section.\n"
+
+                report_content += "\n"
+            self.update_status("Report generation completed.")
+            state["generated_report"] = report_content
+            logger.info("Report generation completed (placeholder)")
+        except Exception as e:
+            error_msg = f"Report generation failed: {str(e)}"
+            logger.error(error_msg)
+            state["errors"].append(error_msg)
+            state["generated_report"] = "# Research Report\n\nError generating report."
+        return state
+
     def retrieve_documents(self, state: AgentState) -> AgentState:
         """Retrieve documents using standard LangChain retrievers"""
         start_time = time.time()
@@ -126,7 +301,8 @@ class ResearchAgentGraph:
             documents = []
             
             # Use ArxivRetriever for academic queries
-            if "academic" in analysis.get("sources", []) or analysis.get("domain") == "academic":
+            if False:
+            # if "academic" in analysis.get("sources", []) or analysis.get("domain") == "academic":
                 try:
                     arxiv_docs = self.arxiv_retriever.get_relevant_documents(query)
                     for doc in arxiv_docs[:3]:  # Limit results
@@ -145,7 +321,7 @@ class ResearchAgentGraph:
                 try:
                     web_results = self.web_search_tool.run(query)
                     if isinstance(web_results, list):
-                        for result in web_results[:3]:  # Limit results
+                        for result in web_results:  # Limit results
                             documents.append({
                                 "content": result.get("snippet", ""),
                                 "source": "web",
@@ -283,17 +459,25 @@ class ResearchAgentGraph:
         workflow = StateGraph(AgentState)
         
         # Add nodes using standard LangGraph approach
-        workflow.add_node("analyze_query", self.analyze_query)
-        workflow.add_node("retrieve_documents", self.retrieve_documents)
-        workflow.add_node("process_with_rag", self.process_with_rag)
-        workflow.add_node("generate_report", self.generate_report)
-        
+        # workflow.add_node("analyze_query", self.analyze_query)
+        # workflow.add_node("retrieve_documents", self.retrieve_documents)
+        # workflow.add_node("process_with_rag", self.process_with_rag)
+        # workflow.add_node("generate_report", self.generate_report)
+
+
         # Define the flow using standard LangGraph edges
-        workflow.add_edge(START, "analyze_query")
-        workflow.add_edge("analyze_query", "retrieve_documents")
-        workflow.add_edge("retrieve_documents", "process_with_rag")
-        workflow.add_edge("process_with_rag", "generate_report")
-        workflow.add_edge("generate_report", END)
+        # workflow.add_edge(START, "analyze_query")
+        # workflow.add_edge("analyze_query", "retrieve_documents")
+        # workflow.add_edge("retrieve_documents", "process_with_rag")
+        # workflow.add_edge("process_with_rag", "generate_report")
+        # workflow.add_edge("generate_report", END)
+
+        workflow.add_node("report_planner", self.report_planner)
+        workflow.add_node("report_generator", self.report_generator)
+
+        workflow.add_edge(START, "report_planner")
+        workflow.add_edge("report_planner", "report_generator")
+        workflow.add_edge("report_generator", END)
         
         return workflow.compile()
     
@@ -338,6 +522,10 @@ class ResearchAgentGraph:
             
             # Execute the graph
             result = self.graph.invoke(initial_state)
+
+            with open("debug_log", "w") as f:
+                f.write(str(result))
+                # f.write(json.dumps(result, indent=2))
             
             logger.info(f"Research workflow completed for query: {query}")
             return result

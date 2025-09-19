@@ -121,6 +121,37 @@ def display_human_review_interface():
                     st.error(f"Invalid JSON format: {str(e)}")
                     st.error("Please fix the JSON syntax and try again.")
         
+        with col3:
+            if st.button("❌ Reject Plan", type="secondary", key="reject_plan"):
+                st.session_state.show_rejection_dialog = True
+                st.rerun()
+        
+        # Show rejection dialog if flag is set
+        if st.session_state.get('show_rejection_dialog', False):
+            with st.expander("Plan Rejection", expanded=True):
+                st.warning("You are about to reject this research plan.")
+                
+                feedback = st.text_area(
+                    "Provide feedback for rejection (optional):",
+                    placeholder="e.g., Please add more sections about specific topics, change focus, etc.",
+                    key="rejection_feedback_input",
+                    height=100
+                )
+                
+                col_confirm, col_cancel = st.columns(2)
+                
+                with col_confirm:
+                    if st.button("🔴 Confirm Rejection", type="primary", key="confirm_reject"):
+                        print("="*20, "[UI] Confirming Plan Rejection ", "="*20)
+                        print(f"Feedback: {feedback}")
+                        st.session_state.show_rejection_dialog = False
+                        handle_plan_rejection(feedback)
+                
+                with col_cancel:
+                    if st.button("↩️ Cancel", type="secondary", key="cancel_reject"):
+                        st.session_state.show_rejection_dialog = False
+                        st.rerun()
+
         # JSON validation feedback
         try:
             json.loads(edited_plan_json)
@@ -153,6 +184,35 @@ def handle_plan_approval(original_plan=False, modified_plan=None):
         
     except Exception as e:
         st.error(f"Error approving plan: {str(e)}")
+
+
+def handle_plan_rejection(feedback: str = ""):
+    """Handle plan rejection and provide feedback options"""
+    try:
+        # Call the reject_plan method from the graph
+        result = st.session_state.research_agent.reject_plan(
+            st.session_state.thread_id, 
+            feedback if feedback.strip() else "Plan rejected by user"
+        )
+        
+        # Reset the review state
+        st.session_state.awaiting_human_review = False
+        st.session_state.current_results = result
+
+        print("="*20, "[UI] Plan Rejected by User ", "="*20)
+        print(f"result: {result}")
+        print(f"feedback: {feedback}")
+        
+        st.warning("Plan rejected. You can modify your query and restart the research process.")
+        if feedback.strip():
+            st.info(f"Your feedback: {feedback}")
+        st.info("Consider refining your research question or providing more specific requirements.")
+                
+        st.rerun()
+        
+    except Exception as e:
+        print("="*20, "[UI] Error Rejecting Plan ", "="*20)
+        st.error(f"Error rejecting plan: {str(e)}")
 
 
 
@@ -203,6 +263,9 @@ def main():
         
     if 'awaiting_human_review' not in st.session_state:
         st.session_state.awaiting_human_review = False
+    
+    if 'show_rejection_dialog' not in st.session_state:
+        st.session_state.show_rejection_dialog = False
     
     # Sidebar
     with st.sidebar:
@@ -262,6 +325,8 @@ def main():
         display_human_review_interface()
     
     # Display results
+    print("="*20, " [Main] Current Results ", "="*20)
+    print(st.session_state.current_results)
     if st.session_state.current_results:
         display_results(st.session_state.current_results)
 
@@ -292,6 +357,7 @@ def conduct_research(query: str, config: Dict[str, Any]):
         
         # Execute until interrupt (human review)
         try:
+            print("="*20, " Starting Research Run ", "="*20)
             results = agent.run(query, st.session_state.thread_id)
             
             # Check if we hit the human review interrupt
@@ -299,7 +365,6 @@ def conduct_research(query: str, config: Dict[str, Any]):
             if current_state.get("human_review_required", False) and not current_state.get("human_approved", False):
                 st.session_state.awaiting_human_review = True
                 status_text.text("Research plan generated. Please review below.")
-                progress_bar.progress(60)
                 st.rerun()
                 return
             
@@ -311,7 +376,6 @@ def conduct_research(query: str, config: Dict[str, Any]):
                 if current_state.get("human_review_required", False):
                     st.session_state.awaiting_human_review = True
                     status_text.text("Research plan generated. Please review below.")
-                    progress_bar.progress(60)
                     st.rerun()
                     return
                 else:
@@ -413,6 +477,8 @@ def display_results(results):
             st.markdown("---")
             st.markdown("## Research Analysis")
             st.markdown(results['generated_text'])
+        elif results.get('error'):
+            st.error(f"Error: {results['error']}")
         else:
             st.warning("Research analysis not available")
         

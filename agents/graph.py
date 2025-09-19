@@ -74,6 +74,10 @@ class ResearchAgentGraph:
         # Build the workflow graph
         self.graph = self._build_graph()
 
+        print("="*20, " Langchain Graph ", "="*20)
+        print(self.graph.get_graph().draw_mermaid())
+
+
     def set_status_handler(self, status_handler):
         """Set or update the status handler for UI updates"""
         self.status_handler = status_handler
@@ -119,14 +123,15 @@ class ResearchAgentGraph:
             analysis_prompt = ChatPromptTemplate.from_template(
                 """
                 You are a research planner. Based on the user's research query, generate a structured outline for a research report.  
-                - The report should contain 5-8 sections, beginning with an Introduction and ending with a Conclusion.  
-                - For each section, create 2-4 focused sub-queries that are *explicitly and directly* connected to the research query, 
+                - The report should contain 2-3 sections, beginning with an Introduction and ending with a Conclusion.  
+                - For each section, create 2-3 focused sub-queries that are *explicitly and directly* connected to the research query, 
                 to guide information gathering.
                 - each sub-query must be complete on its own and related to the research query. 
                     example of sub-queries:
                     topic of research: Tom and Jerry
                     bad example of sub-query: "First theatrical short film release?"
                     good example of sub-query: "When was the first theatrical short film of Tom and Jerry released?"
+                - also find a suitable title for the report. A report title should be clear, concise, and informative, directly related to the user's query and purpose to help readers immediately understand what the report addresses.
                 - Use both the provided context and your own knowledge to ensure comprehensive coverage of the topic.
 
                 context: {context}
@@ -152,7 +157,8 @@ class ResearchAgentGraph:
                                 "Sub-query 2"
                             ]
                         }}
-                    ]
+                    ],
+                    "report_title": "Title of the Report"
                 }}
                 """
             )
@@ -198,8 +204,6 @@ class ResearchAgentGraph:
             state["report_plan"] = state["modified_plan"]
             logger.info("Using human-modified research plan")
 
-
-
         return state
     
     def should_continue_to_generation(self, state: AgentState) -> str:
@@ -208,7 +212,7 @@ class ResearchAgentGraph:
             return "report_generator"
         else:
             # Stay in review mode until human approves
-            return "human_review_node"
+            return "report_planner"
     
     def report_generator(self, state: AgentState) -> AgentState:
         """Generate the report based on the plan"""
@@ -217,14 +221,14 @@ class ResearchAgentGraph:
         try:
             plan = state.get("report_plan", {})
             report_sections = plan.get("report_sections", [])
-            report_title = state.get("original_query", "Research Report")
-            report_content = ""
+            report_title = plan.get("report_title", "Research Report")
+            report_content = f"## {report_title}\n\n"
             self.progress_max_count += len(report_sections)
             for i, section in enumerate(report_sections):
                 title = section.get("title", "Untitled Section")
                 report_content += f"### {i+1}. {title}\n\n"
                 combined_snippets = ""
-                self.update_status(f"Generating content for section: ({(i+1)/len(report_sections)}) {title}")
+                self.update_status(f"Generating content for section ({i+1}/{len(report_sections)}): {title}")
                 for sub_query in section.get("sub_queries", []):
                     try:
                         # Use web search tool to fetch content for the sub-query
@@ -241,7 +245,7 @@ class ResearchAgentGraph:
                         """
                     Based on the following snippets, generate a detailed and coherent section-content for the below
                     section-heading and research-topic. the content should be comprehensive and informative. the content should be 
-                    200-300 words long, written in natural language, and in paragraph form.
+                    20-30 words long, written in natural language, and in paragraph form.
 
                     Snippets:
                     {snippets}
@@ -295,7 +299,7 @@ class ResearchAgentGraph:
             self.should_continue_to_generation,
             {
                 "report_generator": "report_generator",
-                "human_review_node": "human_review_node"  # Loop back if not approved
+                "report_planner": "report_planner"  # Loop back if not approved
             }
         )
         
@@ -431,19 +435,21 @@ class ResearchAgentGraph:
     
     def reject_plan(self, thread_id: str = "default", feedback: str = "") -> Dict[str, Any]:
         """Reject the plan and request regeneration"""
+        print("="*20, "[Graph] Rejecting Plan ", "="*20)
         try:
             config = {"configurable": {"thread_id": thread_id}}
             
             updates = {
                 "human_approved": False,
                 "human_feedback": feedback,
-                "human_review_required": True
+                "human_review_required": False
             }
             
             self.graph.update_state(config, updates)
-            return {"status": "Plan rejected, please regenerate or modify"}
+            final_result = self.graph.invoke(None, config)
+            return final_result
             
         except Exception as e:
             error_msg = f"Failed to reject plan: {str(e)}"
             logger.error(error_msg)
-            return {"errors": [error_msg]}
+            return {"error": [error_msg]}

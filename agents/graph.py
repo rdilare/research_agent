@@ -21,6 +21,15 @@ import json
 import time
 from datetime import datetime
 
+# Import constrained decoding utilities
+from .constrained_decoding import (
+    PydanticConstrainedParser, 
+    JSONConstrainedParser, 
+    ConstrainedLLMChain,
+    ConstrainedDecodingError
+)
+from .pydentic_models import ReportPlan, ReportSection, SectionContent
+
 logger = logging.getLogger(__name__)
 
 
@@ -65,6 +74,28 @@ class ResearchAgentGraph:
             temperature=config.get('llm', {}).get('temperature', 0.7)
         )
         
+        # Initialize constrained decoding parsers
+        self.report_plan_parser = PydanticConstrainedParser(
+            pydantic_object=ReportPlan,
+            max_retries=config.get('constrained_decoding', {}).get('max_retries', 3),
+            allow_partial=config.get('constrained_decoding', {}).get('allow_partial', True),
+            fill_defaults=True
+        )
+        
+        self.section_content_parser = PydanticConstrainedParser(
+            pydantic_object=SectionContent,
+            max_retries=config.get('constrained_decoding', {}).get('max_retries', 3),
+            allow_partial=config.get('constrained_decoding', {}).get('allow_partial', True),
+            fill_defaults=True
+        )
+        
+        # Create constrained LLM chains
+        self.constrained_llm = ConstrainedLLMChain(
+            llm=self.llm,
+            parser=self.report_plan_parser,
+            max_retries=config.get('constrained_decoding', {}).get('chain_retries', 2)
+        )
+        
         # Standard LangChain retrievers and tools
         self.web_search_tool = DuckDuckGoSearchResults(max_results=5, output_format="list")
         
@@ -74,8 +105,8 @@ class ResearchAgentGraph:
         # Build the workflow graph
         self.graph = self._build_graph()
 
-        print("="*20, " Langchain Graph ", "="*20)
-        print(self.graph.get_graph().draw_mermaid())
+        # print("="*20, " Langchain Graph ", "="*20)
+        # print(self.graph.get_graph().draw_mermaid())
 
 
     def set_status_handler(self, status_handler):
@@ -99,7 +130,7 @@ class ResearchAgentGraph:
     
     
     def report_planner(self, state: AgentState) -> AgentState:
-        """Plan the report structure"""
+        """Plan the report structure using constrained decoding"""
 
         self.update_status("Planning report structure...", restart_counter=True)
 
@@ -119,73 +150,90 @@ class ResearchAgentGraph:
             logger.warning(f"Web search for report planning failed: {e}")
 
         try:
-
+            self.update_status("Planning report sections with constrained decoding...")
+            
+            # Create constrained prompt template
             analysis_prompt = ChatPromptTemplate.from_template(
                 """
                 You are a research planner. Based on the user's research query, generate a structured outline for a research report.  
-                - The report should contain 2-3 sections, beginning with an Introduction and ending with a Conclusion.  
+                - The report should contain 5-8 sections, beginning with an Introduction and ending with a Conclusion.  
                 - For each section, create 2-3 focused sub-queries that are *explicitly and directly* connected to the research query, 
                 to guide information gathering.
-                - each sub-query must be complete on its own and related to the research query. 
-                    example of sub-queries:
-                    topic of research: Tom and Jerry
-                    bad example of sub-query: "First theatrical short film release?"
-                    good example of sub-query: "When was the first theatrical short film of Tom and Jerry released?"
-                - also find a suitable title for the report. A report title should be clear, concise, and informative, directly related to the user's query and purpose to help readers immediately understand what the report addresses.
+                - Each sub-query must be complete on its own and related to the research query. 
+                    Example of sub-queries:
+                    Topic of research: Tom and Jerry
+                    Bad example of sub-query: "First theatrical short film release?"
+                    Good example of sub-query: "When was the first theatrical short film of Tom and Jerry released?"
+                - Also find a suitable title for the report. A report title should be clear, concise, and informative, directly related to the user's query and purpose to help readers immediately understand what the report addresses.
                 - Use both the provided context and your own knowledge to ensure comprehensive coverage of the topic.
 
-                context: {context}
-                
+                Context: {context}
                 Research Query: {query}
 
-                Respond only with a JSON object containing: report_sections, and no other explanation. JSON object should be
-                wrapped inside multiline python string. it should not be wrapped inside triple backticks or any other markdown syntax.
-                like:
-                {{
-                    "report_sections": [
-                        {{
-                            "title": "Section 1 Title",
-                            "sub_queries": [
-                                "Sub-query 1",
-                                "Sub-query 2"
-                            ]
-                        }},
-                        {{
-                            "title": "Section 2 Title",
-                            "sub_queries": [
-                                "Sub-query 1",
-                                "Sub-query 2"
-                            ]
-                        }}
-                    ],
-                    "report_title": "Title of the Report"
-                }}
+                {format_instructions}
+                
+                {validation_guidance}
                 """
             )
-            self.update_status("Planning report sections...")
-            chain = analysis_prompt | self.llm | StrOutputParser()
-            result = chain.invoke({"context": context, "query": query})
-            try:
-                # print("report planning result: ", result)
-                plan = json.loads(result)
-                # print("plan: ", plan)
-                state["report_plan"] = plan
-                # Set flag to require human review
-                state["human_review_required"] = True
-                state["human_approved"] = False
-                state["human_feedback"] = ""
-                state["modified_plan"] = {}
-            except json.JSONDecodeError:
-                print("Report planning result is not valid JSON")
-                print("result:\n", result)
-                state["report_plan"] = {"report_sections": []}
-
-            logger.info("Report planning completed (placeholder)")
+            
+            # Use constrained decoding chain
+            constrained_chain = ConstrainedLLMChain(
+                llm=self.llm,
+                parser=self.report_plan_parser,
+                max_retries=3
+            )
+            
+            # Invoke with constrained decoding
+            result = constrained_chain.invoke({
+                "context": context, 
+                "query": query,
+                "format_instructions": self.report_plan_parser.get_format_instructions(),
+                "validation_guidance": ""
+            })
+            
+            # Convert Pydantic model to dict for state storage
+            state["report_plan"] = result.dict()
+            
+            # Set flag to require human review
+            state["human_review_required"] = True
+            state["human_approved"] = False
+            state["human_feedback"] = ""
+            state["modified_plan"] = {}
+            
+            logger.info(f"Report planning completed with constrained decoding. Generated {len(result.report_sections)} sections.")
+            
+        except ConstrainedDecodingError as e:
+            error_msg = f"Constrained decoding failed for report planning: {str(e)}"
+            logger.error(error_msg)
+            print(error_msg)
+            state["errors"].append(error_msg)
+            
+            # Fallback to minimal structure
+            state["report_plan"] = {
+                "report_title": f"Research Report: {query[:50]}...",
+                "report_sections": [
+                    {
+                        "title": "Introduction",
+                        "sub_queries": [f"What is {query}?", f"Why is {query} important?"]
+                    },
+                    {
+                        "title": "Conclusion", 
+                        "sub_queries": [f"What are the key findings about {query}?"]
+                    }
+                ]
+            }
+            
         except Exception as e:
             error_msg = f"Report planning failed: {str(e)}"
             logger.error(error_msg)
             print(error_msg)
             state["errors"].append(error_msg)
+            
+            # Fallback to minimal structure
+            state["report_plan"] = {
+                "report_title": "Research Report",
+                "report_sections": []
+            }
 
         return state
     
@@ -215,8 +263,7 @@ class ResearchAgentGraph:
             return "report_planner"
     
     def report_generator(self, state: AgentState) -> AgentState:
-        """Generate the report based on the plan"""
-        # Placeholder implementation
+        """Generate the report based on the plan using constrained decoding"""
         self.update_status("Generating report...")  
         try:
             plan = state.get("report_plan", {})
@@ -224,53 +271,106 @@ class ResearchAgentGraph:
             report_title = plan.get("report_title", "Research Report")
             report_content = f"## {report_title}\n\n"
             self.progress_max_count += len(report_sections)
+            
             for i, section in enumerate(report_sections):
                 title = section.get("title", "Untitled Section")
                 report_content += f"### {i+1}. {title}\n\n"
                 combined_snippets = ""
                 self.update_status(f"Generating content for section ({i+1}/{len(report_sections)}): {title}")
+                
+                # Collect snippets for all sub-queries in this section
                 for sub_query in section.get("sub_queries", []):
                     try:
                         # Use web search tool to fetch content for the sub-query
                         web_results = self.web_search_tool.run(sub_query)
-                        snippets = [result.get("snippet", "") for result in web_results]  # Collect top 3 snippets
-                        combined_snippets = "\n".join(snippets)
+                        snippets = [result.get("snippet", "") for result in web_results]
+                        combined_snippets += "\n".join(snippets) + "\n\n"
                     except Exception as e:
                         logger.warning(f"Web search failed for sub-query '{sub_query}': {e}")
 
-                # summarize the snippets using LLM   
+                # Generate section content using constrained decoding
                 try:
-                    # Use LLM to generate content based on the combined snippets
+                    self.update_status(f"Generating structured content for: {title}")
+                    
                     content_prompt = ChatPromptTemplate.from_template(
                         """
-                    Based on the following snippets, generate a detailed and coherent section-content for the below
-                    section-heading and research-topic. the content should be comprehensive and informative. the content should be 
-                    20-30 words long, written in natural language, and in paragraph form.
+                        Based on the following snippets, generate detailed and coherent section content for the given
+                        section heading and research topic. The content should be comprehensive, informative, 
+                        and well-structured.
 
-                    Snippets:
-                    {snippets}
+                        Snippets: {snippets}
+                        Section Heading: {section_heading}
+                        Research Topic: {topic}
 
-                    Section-heading: {section_heading}
-                    Research-topic: {topic}
+                        {format_instructions}
+                        
+                        {validation_guidance}
+                        """
+                    )
+                    
+                    # Create constrained chain for section content
+                    section_chain = ConstrainedLLMChain(
+                        llm=self.llm,
+                        parser=self.section_content_parser,
+                        max_retries=2
+                    )
+                    
+                    # Invoke with constrained decoding
+                    section_result = section_chain.invoke({
+                        "snippets": combined_snippets, 
+                        "section_heading": title, 
+                        "topic": report_title,
+                        "format_instructions": self.section_content_parser.get_format_instructions(),
+                        "validation_guidance": ""
+                    })
+                    
+                    # Extract content from structured output
+                    report_content += f"{section_result.content}\n\n"
+                    logger.info(f"Generated structured content for section: {title}")
+                    
+                except ConstrainedDecodingError as e:
+                    logger.warning(f"Constrained decoding failed for section '{title}': {e}")
+                    # Fallback to simple string generation
+                    try:
+                        content_prompt = ChatPromptTemplate.from_template(
+                            """
+                            Based on the following snippets, generate detailed and coherent section content for the below
+                            section heading and research topic. The content should be comprehensive and informative. 
+                            The content should be 200-300 words long, written in natural language, and in paragraph form.
 
-                    Respond with the generated content for this section and do not add the section-heading.
-                    """)
-                    chain = content_prompt | self.llm | StrOutputParser()
-                    section_content = chain.invoke({"snippets": combined_snippets, "section_heading": title, "topic": report_title})
-                    report_content += f"{section_content}\n"
+                            Snippets: {snippets}
+                            Section Heading: {section_heading}
+                            Research Topic: {topic}
+
+                            Respond with the generated content for this section. Do not add the section heading.
+                            """
+                        )
+                        chain = content_prompt | self.llm | StrOutputParser()
+                        section_content = chain.invoke({
+                            "snippets": combined_snippets, 
+                            "section_heading": title, 
+                            "topic": report_title
+                        })
+                        report_content += f"{section_content}\n\n"
+                        logger.info(f"Generated fallback content for section: {title}")
+                    except Exception as fallback_e:
+                        logger.warning(f"Fallback content generation also failed: {fallback_e}")
+                        report_content += f"  - Error generating content for this section: {title}\n\n"
+                
                 except Exception as e:
-                    logger.warning(f"LLM content generation failed for this section: '{title}': {e}")
-                    report_content += f"  - Error generating content for this section.\n"
-
-                report_content += "\n"
+                    logger.warning(f"Content generation failed for section '{title}': {e}")
+                    report_content += f"  - Error generating content for this section: {title}\n\n"
+                
             self.update_status("Report generation completed.")
             state["generated_report"] = report_content
-            logger.info("Report generation completed (placeholder)")
+            logger.info("Report generation completed with constrained decoding")
+            
         except Exception as e:
             error_msg = f"Report generation failed: {str(e)}"
             logger.error(error_msg)
             state["errors"].append(error_msg)
             state["generated_report"] = "# Research Report\n\nError generating report."
+            
         return state
 
     
@@ -434,8 +534,6 @@ class ResearchAgentGraph:
             return {"errors": [error_msg]}
     
     def reject_plan(self, thread_id: str = "default", feedback: str = "") -> Dict[str, Any]:
-        """Reject the plan and request regeneration"""
-        print("="*20, "[Graph] Rejecting Plan ", "="*20)
         try:
             config = {"configurable": {"thread_id": thread_id}}
             

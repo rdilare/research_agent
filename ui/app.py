@@ -142,8 +142,6 @@ def display_human_review_interface():
                 
                 with col_confirm:
                     if st.button("🔴 Confirm Rejection", type="primary", key="confirm_reject"):
-                        print("="*20, "[UI] Confirming Plan Rejection ", "="*20)
-                        print(f"Feedback: {feedback}")
                         st.session_state.show_rejection_dialog = False
                         handle_plan_rejection(feedback)
                 
@@ -198,10 +196,6 @@ def handle_plan_rejection(feedback: str = ""):
         # Reset the review state
         st.session_state.awaiting_human_review = False
         st.session_state.current_results = result
-
-        print("="*20, "[UI] Plan Rejected by User ", "="*20)
-        print(f"result: {result}")
-        print(f"feedback: {feedback}")
         
         st.warning("Plan rejected. You can modify your query and restart the research process.")
         if feedback.strip():
@@ -325,8 +319,6 @@ def main():
         display_human_review_interface()
     
     # Display results
-    print("="*20, " [Main] Current Results ", "="*20)
-    print(st.session_state.current_results)
     if st.session_state.current_results:
         display_results(st.session_state.current_results)
 

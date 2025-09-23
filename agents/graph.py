@@ -6,32 +6,24 @@ from typing_extensions import TypedDict
 from langgraph.graph import StateGraph, END, START
 from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
-from langchain_core.tools import BaseTool
-from langchain_core.retrievers import BaseRetriever
-from langchain_community.retrievers import ArxivRetriever
+from langchain_core.messages import HumanMessage
 from langchain_community.tools import DuckDuckGoSearchResults
-from langchain_community.vectorstores import FAISS
 try:
     from langchain_ollama import OllamaLLM as Ollama
 except ImportError:
     from langchain_community.llms import Ollama  # Fallback for older versions
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 import logging
-import json
-import time
 from datetime import datetime
 
-# Import constrained decoding utilities
+# Import JSON-constrained decoding utilities
 from .constrained_decoding import (
-    PydanticConstrainedParser, 
-    JSONConstrainedParser, 
-    ConstrainedLLMChain,
-    ConstrainedDecodingError
+    JSONDecodingError,
+    create_json_parser,
+    create_json_chain
 )
-from .pydentic_models import ReportPlan, ReportSection, SectionContent
+from .pydentic_models import ReportPlan, SectionContent
 
 logger = logging.getLogger(__name__)
 
@@ -77,25 +69,17 @@ class ResearchAgentGraph:
             temperature=config.get('llm', {}).get('temperature', 0.7)
         )
         
-        # Initialize constrained decoding parsers
-        self.report_plan_parser = PydanticConstrainedParser(
-            pydantic_object=ReportPlan,
-            max_retries=config.get('constrained_decoding', {}).get('max_retries', 3),
+        # Initialize JSON-constrained parsers for structured outputs
+        self.report_plan_parser = create_json_parser(
+            ReportPlan,
             allow_partial=config.get('constrained_decoding', {}).get('allow_partial', True),
             fill_defaults=True
         )
         
-        self.section_content_parser = PydanticConstrainedParser(
-            pydantic_object=SectionContent,
-            max_retries=config.get('constrained_decoding', {}).get('max_retries', 3),
+        self.section_content_parser = create_json_parser(
+            SectionContent,
             allow_partial=config.get('constrained_decoding', {}).get('allow_partial', True),
             fill_defaults=True
-        )
-        
-        # Create constrained LLM chains
-        self.constrained_llm = ConstrainedLLMChain(
-            llm=self.llm,
-            parser=self.report_plan_parser
         )
         
         # Standard LangChain retrievers and tools
@@ -116,6 +100,9 @@ class ResearchAgentGraph:
         self.status_handler = status_handler
 
     def update_status(self, message: str, restart_counter: bool = False):
+        # Safely handle missing or invalid status handler
+        if not self.status_handler or not isinstance(self.status_handler, dict):
+            return
         if restart_counter:
             self.progress_counter = 0
         self.progress_counter += 1
@@ -124,7 +111,7 @@ class ResearchAgentGraph:
             progress_percent = min(100, int((self.progress_counter / self.progress_max_count) * 100))
             self.status_handler["progress_bar"].progress(progress_percent)
 
-        """Update status in the UI if status_handler is provided"""
+        # Update status in the UI if status_handler is provided
         if "status_container" in self.status_handler:
             if "blinking_text" in self.status_handler:
                 self.status_handler["status_container"].html(self.status_handler["blinking_text"](message))
@@ -134,7 +121,7 @@ class ResearchAgentGraph:
     
     
     def report_planner(self, state: AgentState) -> AgentState:
-        """Plan the report structure using constrained decoding"""
+        """Plan the report structure using JSON-constrained decoding"""
 
         self.update_status("Planning report structure...", restart_counter=True)
 
@@ -154,7 +141,6 @@ class ResearchAgentGraph:
             logger.warning(f"Web search for report planning failed: {e}")
 
         try:
-            self.update_status("Planning report sections...")
             
             # Create constrained prompt template
             analysis_prompt = ChatPromptTemplate.from_template(
@@ -175,30 +161,25 @@ class ResearchAgentGraph:
                 Research Query: {query}
 
                 {format_instructions}
-                
-                {validation_guidance}
                 """
             )
             
-            # Use constrained decoding chain
-            constrained_chain = ConstrainedLLMChain(
+            # Use JSON-constrained chain
+            json_chain = create_json_chain(
                 llm=self.llm,
-                parser=self.report_plan_parser
+                pydantic_model=ReportPlan,
+                allow_partial=True,
+                fill_defaults=True
             )
             
             # Invoke with constrained decoding
             prompt_text = analysis_prompt.format(
                 context=context, 
                 query=query,
-                format_instructions=self.report_plan_parser.get_format_instructions(),
-                validation_guidance=""
+                format_instructions=self.report_plan_parser.get_format_instructions()
             )
             
-            # Remove the "Human: " prefix that ChatPromptTemplate adds
-            if prompt_text.startswith("Human: "):
-                prompt_text = prompt_text[7:]
-            
-            result = constrained_chain.run(prompt_text)
+            result = json_chain.run(prompt_text)
             
             # Convert Pydantic model to dict for state storage
             if hasattr(result, 'model_dump'):
@@ -212,10 +193,10 @@ class ResearchAgentGraph:
             state["human_feedback"] = ""
             state["modified_plan"] = {}
             
-            logger.info(f"Report planning completed with constrained decoding. Generated {len(result.report_sections)} sections.")
+            logger.info(f"Report planning completed with JSON-constrained decoding. Generated {len(result.report_sections)} sections.")
             
-        except ConstrainedDecodingError as e:
-            error_msg = f"Constrained decoding failed for report planning: {str(e)}"
+        except JSONDecodingError as e:
+            error_msg = f"JSON decoding failed for report planning: {str(e)}"
             logger.error(error_msg)
             print(error_msg)
             state["errors"].append(error_msg)
@@ -275,7 +256,7 @@ class ResearchAgentGraph:
             return "report_planner"
     
     def report_generator(self, state: AgentState) -> AgentState:
-        """Generate the report based on the plan using constrained decoding"""
+        """Generate the report based on the plan using JSON-constrained decoding"""
         self.update_status("Generating report...")  
         try:
             plan = state.get("report_plan", {})
@@ -313,15 +294,15 @@ class ResearchAgentGraph:
                         Research Topic: {topic}
 
                         {format_instructions}
-                        
-                        {validation_guidance}
                         """
                     )
                     
-                    # Create constrained chain for section content
-                    section_chain = ConstrainedLLMChain(
+                    # Create JSON-constrained chain for section content
+                    section_chain = create_json_chain(
                         llm=self.llm,
-                        parser=self.section_content_parser
+                        pydantic_model=SectionContent,
+                        allow_partial=True,
+                        fill_defaults=True
                     )
                     
                     # Invoke with constrained decoding
@@ -329,13 +310,8 @@ class ResearchAgentGraph:
                         snippets=combined_snippets, 
                         section_heading=title, 
                         topic=report_title,
-                        format_instructions=self.section_content_parser.get_format_instructions(),
-                        validation_guidance=""
+                        format_instructions=self.section_content_parser.get_format_instructions()
                     )
-                    
-                    # Remove the "Human: " prefix that ChatPromptTemplate adds
-                    if prompt_text.startswith("Human: "):
-                        prompt_text = prompt_text[7:]
                     
                     section_result = section_chain.run(prompt_text)
                     
@@ -343,8 +319,8 @@ class ResearchAgentGraph:
                     report_content += f"{section_result.content}\n\n"
                     logger.info(f"Generated structured content for section: {title}")
                     
-                except ConstrainedDecodingError as e:
-                    logger.warning(f"Constrained decoding failed for section '{title}': {e}")
+                except JSONDecodingError as e:
+                    logger.warning(f"JSON decoding failed for section '{title}': {e}")
                     # Fallback to simple string generation
                     try:
                         content_prompt = ChatPromptTemplate.from_template(
@@ -378,7 +354,7 @@ class ResearchAgentGraph:
                 
             self.update_status("Report generation completed.")
             state["generated_report"] = report_content
-            logger.info("Report generation completed with constrained decoding")
+            logger.info("Report generation completed with JSON-constrained decoding")
             
         except Exception as e:
             error_msg = f"Report generation failed: {str(e)}"
@@ -473,7 +449,7 @@ class ResearchAgentGraph:
             # Execute the graph with config
             result = self.graph.invoke(initial_state, config)
 
-            with open("debug_log", "w") as f:
+            with open("debug_log.log", "w") as f:
                 f.write(str(result))
                 # f.write(json.dumps(result, indent=2))
             
@@ -565,4 +541,4 @@ class ResearchAgentGraph:
         except Exception as e:
             error_msg = f"Failed to reject plan: {str(e)}"
             logger.error(error_msg)
-            return {"error": [error_msg]}
+            return {"errors": [error_msg]}

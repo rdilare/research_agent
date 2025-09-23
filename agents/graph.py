@@ -16,6 +16,7 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 import logging
 from datetime import datetime
+import time
 
 # Import JSON-constrained decoding utilities
 from .constrained_decoding import (
@@ -122,36 +123,39 @@ class ResearchAgentGraph:
     
     def report_planner(self, state: AgentState) -> AgentState:
         """Plan the report structure using JSON-constrained decoding"""
-
+        start_time = time.time()
         self.update_status("Planning report structure...", restart_counter=True)
-
         web_snippets = []
         context = ""
         query = state["messages"][-1].content if state["messages"] else state.get("original_query", "")
-
         try:
             self.update_status("Fetching web results for report planning...")
             web_results = self.web_search_tool.run(query)
-            for result in web_results:  # Limit results
+            for result in web_results:
                 web_snippets.append(result.get("snippet", ""))
-
             context = "\n\n".join(web_snippets)
-
         except Exception as e:
             logger.warning(f"Web search for report planning failed: {e}")
-
         try:
-            
-            # Create constrained prompt template
+            example_json = (
+                '{\n'
+                '  "report_sections": [\n'
+                '    {"title": "Introduction", "sub_queries": ["What is ...?", "Why is ... important?"]},\n'
+                '    {"title": "Key Topic A", "sub_queries": ["How does ...?", "What factors influence ...?"]},\n'
+                '    {"title": "Conclusion", "sub_queries": ["What are the key findings about ...?"]}\n'
+                '  ],\n'
+                '  "report_title": "Concise Title"\n'
+                '}'
+            )
             analysis_prompt = ChatPromptTemplate.from_template(
                 """
-                You are a research planner. Based on the user's research query, generate a structured outline for a research report.  
+                You are a research planner. Based on the user's research query, generate a structured outline for a research report in JSON only and no prose.  
                 - The report should contain 5-8 sections, beginning with an Introduction and ending with a Conclusion.  
                 - For each section, create 2-3 focused sub-queries that are *explicitly and directly* connected to the research query, 
                 to guide information gathering.
                 - Each sub-query must be complete on its own and related to the research query. 
+                    Example:
                     Topic of research: Tom and Jerry
-                    Example of sub-queries:
                     Bad example of sub-query: "First theatrical short film release?"
                     Good example of sub-query: "When was the first theatrical short film of Tom and Jerry released?"
                 - Also find a suitable title for the report. A report title should be clear, concise, and informative, directly related to the user's query and purpose to help readers immediately understand what the report addresses.
@@ -160,91 +164,125 @@ class ResearchAgentGraph:
                 Context: {context}
                 Research Query: {query}
 
+                Example (structure only, use different actual values):
+                {example_json}
+
                 {format_instructions}
                 """
             )
-            
-            # Use JSON-constrained chain
             json_chain = create_json_chain(
                 llm=self.llm,
                 pydantic_model=ReportPlan,
                 allow_partial=True,
                 fill_defaults=True
             )
-            
-            # Invoke with constrained decoding
-            prompt_text = analysis_prompt.format(
-                context=context, 
-                query=query,
-                format_instructions=self.report_plan_parser.get_format_instructions()
-            )
-            
-            result = json_chain.run(prompt_text)
-            
-            # Convert Pydantic model to dict for state storage
-            if hasattr(result, 'model_dump'):
-                state["report_plan"] = result.model_dump()
-            else:
-                state["report_plan"] = result.dict()
-            
-            # Set flag to require human review
-            state["human_review_required"] = True
-            state["human_approved"] = False
-            state["human_feedback"] = ""
-            state["modified_plan"] = {}
-            
-            logger.info(f"Report planning completed with JSON-constrained decoding. Generated {len(result.report_sections)} sections.")
-            
+
+            max_attempts = 2
+            last_error = None
+            for attempt in range(1, max_attempts + 1):
+                prompt_text = analysis_prompt.format(
+                    context=context,
+                    query=query,
+                    example_json=example_json,
+                    format_instructions=self.report_plan_parser.get_format_instructions()
+                )
+                if attempt > 1:
+                    prompt_text += "\nIf previous output contained schema metadata or invalid structure, correct it. Output ONLY the JSON object."
+                try:
+                    # Capture raw output by invoking the underlying llm first (best-effort)
+                    raw_output = None
+                    try:
+                        # Mirror logic in JSONConstrainedLLMChain but intercept raw
+                        final_prompt = (
+                            "Return ONLY a valid JSON object. Do not include any text before or after the JSON.\n\n"
+                            + prompt_text
+                        )
+                        if hasattr(self.llm, "invoke"):
+                            raw_obj = self.llm.invoke(final_prompt)
+                        elif hasattr(self.llm, "predict"):
+                            raw_obj = self.llm.predict(final_prompt)
+                        else:
+                            raw_obj = self.llm(final_prompt)  # type: ignore
+                        raw_output = raw_obj.content if hasattr(raw_obj, "content") else str(raw_obj)
+                    except Exception as probe_e:
+                        logger.debug(f"Probe raw output failed (attempt {attempt}): {probe_e}")
+                    if raw_output is not None:
+                        logger.debug(f"Raw LLM output (attempt {attempt}, first 400 chars): {raw_output[:400]}")
+                    # Now parse using existing chain to keep single source of truth
+                    result = json_chain.run(prompt_text)
+                    if hasattr(result, 'model_dump'):
+                        state["report_plan"] = result.model_dump()
+                    else:
+                        state["report_plan"] = result.dict()
+                    state["human_review_required"] = True
+                    state["human_approved"] = False
+                    state["human_feedback"] = ""
+                    state["modified_plan"] = {}
+                    logger.info(
+                        f"Report planning completed (attempt {attempt}) with JSON decoding. Generated {len(result.report_sections)} sections."
+                    )
+                    break
+                except JSONDecodingError as attempt_err:
+                    last_error = attempt_err
+                    logger.warning(f"Report planning JSON decode failure attempt {attempt}/{max_attempts}: {attempt_err}")
+                    if attempt == max_attempts:
+                        raise
+                    continue
         except JSONDecodingError as e:
             error_msg = f"JSON decoding failed for report planning: {str(e)}"
             logger.error(error_msg)
             print(error_msg)
             state["errors"].append(error_msg)
-            
-            # Fallback to minimal structure
             state["report_plan"] = {
                 "report_title": f"Research Report: {query[:50]}...",
                 "report_sections": [
-                    {
-                        "title": "Introduction",
-                        "sub_queries": [f"What is {query}?", f"Why is {query} important?"]
-                    },
-                    {
-                        "title": "Conclusion", 
-                        "sub_queries": [f"What are the key findings about {query}?"]
-                    }
+                    {"title": "Introduction", "sub_queries": [f"What is {query}?", f"Why is {query} important?"]},
+                    {"title": "Conclusion", "sub_queries": [f"What are the key findings about {query}?"]}
                 ]
             }
-            
         except Exception as e:
             error_msg = f"Report planning failed: {str(e)}"
             logger.error(error_msg)
             print(error_msg)
             state["errors"].append(error_msg)
-            
-            # Fallback to minimal structure
-            state["report_plan"] = {
-                "report_title": "Research Report",
-                "report_sections": []
-            }
-
+            state["report_plan"] = {"report_title": "Research Report", "report_sections": []}
+        finally:
+            exec_time = time.time() - start_time
+            try:
+                plan_sections = len(state.get("report_plan", {}).get("report_sections", []))
+                self._log_step(
+                    step_name="report_planner",
+                    inputs={"query": query, "context_len": len(context)},
+                    outputs={"sections": plan_sections},
+                    execution_time=exec_time,
+                    state=state
+                )
+            except Exception as log_e:
+                logger.warning(f"Failed to log step 'report_planner': {log_e}")
         return state
     
     def human_review_node(self, state: AgentState) -> AgentState:
         """Node for human review of the research plan"""
+        start_time = time.time()
         self.update_status("Waiting for human review of research plan...")
-        
-        # This node will pause execution and wait for human input
-        # The actual review will be handled by the UI
-        # For now, we just mark that review is needed
         state["human_review_required"] = True
-
-        
-        # If there's a modified plan from human feedback, use it
         if state.get("modified_plan") and state["modified_plan"]:
             state["report_plan"] = state["modified_plan"]
             logger.info("Using human-modified research plan")
-
+        exec_time = time.time() - start_time
+        try:
+            self._log_step(
+                step_name="human_review_node",
+                inputs={"needs_review": True},
+                outputs={
+                    "approved": state.get("human_approved"),
+                    "has_modified_plan": bool(state.get("modified_plan"))
+                },
+                execution_time=exec_time,
+                state=state
+            )
+        except Exception as log_e:
+            logger.warning(f"Failed to log step 'human_review_node': {log_e}")
         return state
     
     def should_continue_to_generation(self, state: AgentState) -> str:
@@ -257,6 +295,7 @@ class ResearchAgentGraph:
     
     def report_generator(self, state: AgentState) -> AgentState:
         """Generate the report based on the plan using JSON-constrained decoding"""
+        start_time = time.time()
         self.update_status("Generating report...")  
         try:
             plan = state.get("report_plan", {})
@@ -264,25 +303,19 @@ class ResearchAgentGraph:
             report_title = plan.get("report_title", "Research Report")
             report_content = f"## {report_title}\n\n"
             self.progress_max_count += len(report_sections)
-            
             for i, section in enumerate(report_sections):
                 title = section.get("title", "Untitled Section")
                 report_content += f"### {i+1}. {title}\n\n"
                 combined_snippets = ""
                 self.update_status(f"Generating content for section ({i+1}/{len(report_sections)}): {title}")
-                
-                # Collect snippets for all sub-queries in this section
                 for sub_query in section.get("sub_queries", []):
                     try:
-                        # Use web search tool to fetch content for the sub-query
                         web_results = self.web_search_tool.run(sub_query)
                         snippets = [result.get("snippet", "") for result in web_results]
                         combined_snippets += "\n".join(snippets) + "\n\n"
                     except Exception as e:
                         logger.warning(f"Web search failed for sub-query '{sub_query}': {e}")
-
-                # Generate section content using constrained decoding
-                try:                    
+                try:
                     content_prompt = ChatPromptTemplate.from_template(
                         """
                         Based on the following snippets, generate detailed and coherent section content for the below
@@ -296,32 +329,23 @@ class ResearchAgentGraph:
                         {format_instructions}
                         """
                     )
-                    
-                    # Create JSON-constrained chain for section content
                     section_chain = create_json_chain(
                         llm=self.llm,
                         pydantic_model=SectionContent,
                         allow_partial=True,
                         fill_defaults=True
                     )
-                    
-                    # Invoke with constrained decoding
                     prompt_text = content_prompt.format(
-                        snippets=combined_snippets, 
-                        section_heading=title, 
+                        snippets=combined_snippets,
+                        section_heading=title,
                         topic=report_title,
                         format_instructions=self.section_content_parser.get_format_instructions()
                     )
-                    
                     section_result = section_chain.run(prompt_text)
-                    
-                    # Extract content from structured output
                     report_content += f"{section_result.content}\n\n"
                     logger.info(f"Generated structured content for section: {title}")
-                    
                 except JSONDecodingError as e:
                     logger.warning(f"JSON decoding failed for section '{title}': {e}")
-                    # Fallback to simple string generation
                     try:
                         content_prompt = ChatPromptTemplate.from_template(
                             """
@@ -338,8 +362,8 @@ class ResearchAgentGraph:
                         )
                         chain = content_prompt | self.llm | StrOutputParser()
                         section_content = chain.invoke({
-                            "snippets": combined_snippets, 
-                            "section_heading": title, 
+                            "snippets": combined_snippets,
+                            "section_heading": title,
                             "topic": report_title
                         })
                         report_content += f"{section_content}\n\n"
@@ -347,21 +371,30 @@ class ResearchAgentGraph:
                     except Exception as fallback_e:
                         logger.warning(f"Fallback content generation also failed: {fallback_e}")
                         report_content += f"  - Error generating content for this section: {title}\n\n"
-                
                 except Exception as e:
                     logger.warning(f"Content generation failed for section '{title}': {e}")
                     report_content += f"  - Error generating content for this section: {title}\n\n"
-                
             self.update_status("Report generation completed.")
             state["generated_report"] = report_content
             logger.info("Report generation completed with JSON-constrained decoding")
-            
         except Exception as e:
             error_msg = f"Report generation failed: {str(e)}"
             logger.error(error_msg)
             state["errors"].append(error_msg)
             state["generated_report"] = "# Research Report\n\nError generating report."
-            
+        finally:
+            exec_time = time.time() - start_time
+            try:
+                report_len = len(state.get("generated_report", ""))
+                self._log_step(
+                    step_name="report_generator",
+                    inputs={"sections": len(state.get("report_plan", {}).get("report_sections", []))},
+                    outputs={"report_chars": report_len},
+                    execution_time=exec_time,
+                    state=state
+                )
+            except Exception as log_e:
+                logger.warning(f"Failed to log step 'report_generator': {log_e}")
         return state
 
     

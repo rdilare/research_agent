@@ -93,7 +93,7 @@ def _get_default_config() -> Dict[str, Any]:
 def setup_logging(config: Dict[str, Any]):
     """Setup logging based on configuration"""
     log_config = config.get('logging', {})
-    log_level = log_config.get('level', 'INFO')
+    log_level = log_config.get('level', 'ERROR')
     
     # Setup basic logging
     logging.basicConfig(

@@ -261,14 +261,9 @@ IMPORTANT RULES:
         # If we didn't find a closing brace, take up to a reasonable length
         if brace_count > 0:
             logger.warning(f"JSON appears incomplete, brace_count: {brace_count}")
-            # Try to find a reasonable cutoff point
-            end_idx = min(len(text), start_idx + 5000)  # Limit to prevent huge extractions
-            
-            # Try to end at a reasonable point (end of line, word boundary, etc.)
-            for i in range(end_idx - 1, start_idx, -1):
-                if text[i] in ['\n', '.', '!', '?', ',']:
-                    end_idx = i
-                    break
+            # For incomplete JSON, take everything we have rather than trying to find a cutoff
+            # This preserves as much content as possible for the completion step
+            end_idx = len(text)
         
         extracted = text[start_idx:end_idx]
         
@@ -455,7 +450,33 @@ IMPORTANT RULES:
             model_name = getattr(self.pydantic_object, '__name__', 'Unknown')
             
             if model_name == "SectionContent":
-                # Check if we have section_title but missing other fields
+                # Check if we have section_title but the content field is incomplete
+                if '"section_title"' in text and '"content"' in text:
+                    # Handle case where content string is not properly closed
+                    # Look for the pattern: "content": "some text that ends abruptly
+                    content_match = text.find('"content":')
+                    if content_match != -1:
+                        # Find the opening quote after "content":
+                        content_start = text.find('"', content_match + len('"content":'))
+                        if content_start != -1:
+                            # Check if the content string is properly closed
+                            remaining_text = text[content_start + 1:]
+                            
+                            # Count quotes to see if content string is open
+                            quote_count = remaining_text.count('"')
+                            
+                            # If odd number of quotes, we need to close the content string
+                            if quote_count % 2 == 0:  # Even means the string is open
+                                logger.info("Detected incomplete content string, completing JSON")
+                                # Close the content string and add missing fields
+                                if not text.rstrip().endswith('"'):
+                                    text = text.rstrip() + '"'
+                                if not text.rstrip().endswith(','):
+                                    text = text.rstrip() + ','
+                                text += '\n  "sources_used": []\n}'
+                                return text
+                
+                # Check if we have section_title but missing other fields entirely
                 if '"section_title"' in text and '"content"' not in text:
                     # Find where to insert content field
                     if text.endswith('}'):
@@ -471,6 +492,12 @@ IMPORTANT RULES:
                         if not text.endswith(','):
                             text += ','
                         text += '\n  "sources_used": []\n}'
+                
+                # If we still don't have a closing brace, add it
+                if not text.strip().endswith('}'):
+                    if not text.rstrip().endswith(','):
+                        text = text.rstrip() + ','
+                    text += '\n  "sources_used": []\n}'
             
             return text
     

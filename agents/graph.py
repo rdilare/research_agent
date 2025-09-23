@@ -154,7 +154,7 @@ class ResearchAgentGraph:
             logger.warning(f"Web search for report planning failed: {e}")
 
         try:
-            self.update_status("Planning report sections with constrained decoding...")
+            self.update_status("Planning report sections...")
             
             # Create constrained prompt template
             analysis_prompt = ChatPromptTemplate.from_template(
@@ -164,8 +164,8 @@ class ResearchAgentGraph:
                 - For each section, create 2-3 focused sub-queries that are *explicitly and directly* connected to the research query, 
                 to guide information gathering.
                 - Each sub-query must be complete on its own and related to the research query. 
-                    Example of sub-queries:
                     Topic of research: Tom and Jerry
+                    Example of sub-queries:
                     Bad example of sub-query: "First theatrical short film release?"
                     Good example of sub-query: "When was the first theatrical short film of Tom and Jerry released?"
                 - Also find a suitable title for the report. A report title should be clear, concise, and informative, directly related to the user's query and purpose to help readers immediately understand what the report addresses.

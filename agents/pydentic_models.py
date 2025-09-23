@@ -4,12 +4,6 @@ Pydantic models for structured LLM outputs in the research agent
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
-
-class SubQuery(BaseModel):
-    """Model for individual sub-queries within report sections"""
-    query: str = Field(..., description="A focused sub-query related to the research topic")
-    
-
 class ReportSection(BaseModel):
     """Model for report sections containing title and sub-queries"""
     title: str = Field(..., description="Title of the report section")
@@ -26,7 +20,7 @@ class SectionContent(BaseModel):
     """Model for generated section content"""
     section_title: str = Field(..., description="Title of the section")
     content: str = Field(..., description="Generated content for the section")
-    sources_used: Optional[List[str]] = Field(default=[], description="List of sources or queries used")
+    sources_used: Optional[List[str]] = Field(default_factory=list, description="List of sources or queries used")
 
 
 class ResearchAnalysis(BaseModel):
@@ -51,4 +45,4 @@ class ReportGeneration(BaseModel):
     executive_summary: Optional[str] = Field(default=None, description="Executive summary")
     sections: List[SectionContent] = Field(..., description="Generated report sections")
     conclusions: Optional[str] = Field(default=None, description="Key conclusions")
-    references: Optional[List[str]] = Field(default=[], description="List of references used")
+    references: Optional[List[str]] = Field(default_factory=list, description="List of references used")

@@ -12,7 +12,10 @@ from langchain_core.retrievers import BaseRetriever
 from langchain_community.retrievers import ArxivRetriever
 from langchain_community.tools import DuckDuckGoSearchResults
 from langchain_community.vectorstores import FAISS
-from langchain_community.llms import Ollama  # Use community Ollama instead
+try:
+    from langchain_ollama import OllamaLLM as Ollama
+except ImportError:
+    from langchain_community.llms import Ollama  # Fallback for older versions
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
@@ -92,8 +95,7 @@ class ResearchAgentGraph:
         # Create constrained LLM chains
         self.constrained_llm = ConstrainedLLMChain(
             llm=self.llm,
-            parser=self.report_plan_parser,
-            max_retries=config.get('constrained_decoding', {}).get('chain_retries', 2)
+            parser=self.report_plan_parser
         )
         
         # Standard LangChain retrievers and tools
@@ -118,7 +120,9 @@ class ResearchAgentGraph:
             self.progress_counter = 0
         self.progress_counter += 1
         if "progress_bar" in self.status_handler:
-            self.status_handler["progress_bar"].progress(int((self.progress_counter / self.progress_max_count) * 100))
+            # Cap progress at 100% to avoid invalid values
+            progress_percent = min(100, int((self.progress_counter / self.progress_max_count) * 100))
+            self.status_handler["progress_bar"].progress(progress_percent)
 
         """Update status in the UI if status_handler is provided"""
         if "status_container" in self.status_handler:
@@ -179,20 +183,28 @@ class ResearchAgentGraph:
             # Use constrained decoding chain
             constrained_chain = ConstrainedLLMChain(
                 llm=self.llm,
-                parser=self.report_plan_parser,
-                max_retries=3
+                parser=self.report_plan_parser
             )
             
             # Invoke with constrained decoding
-            result = constrained_chain.invoke({
-                "context": context, 
-                "query": query,
-                "format_instructions": self.report_plan_parser.get_format_instructions(),
-                "validation_guidance": ""
-            })
+            prompt_text = analysis_prompt.format(
+                context=context, 
+                query=query,
+                format_instructions=self.report_plan_parser.get_format_instructions(),
+                validation_guidance=""
+            )
+            
+            # Remove the "Human: " prefix that ChatPromptTemplate adds
+            if prompt_text.startswith("Human: "):
+                prompt_text = prompt_text[7:]
+            
+            result = constrained_chain.run(prompt_text)
             
             # Convert Pydantic model to dict for state storage
-            state["report_plan"] = result.dict()
+            if hasattr(result, 'model_dump'):
+                state["report_plan"] = result.model_dump()
+            else:
+                state["report_plan"] = result.dict()
             
             # Set flag to require human review
             state["human_review_required"] = True
@@ -289,14 +301,12 @@ class ResearchAgentGraph:
                         logger.warning(f"Web search failed for sub-query '{sub_query}': {e}")
 
                 # Generate section content using constrained decoding
-                try:
-                    self.update_status(f"Generating structured content for: {title}")
-                    
+                try:                    
                     content_prompt = ChatPromptTemplate.from_template(
                         """
-                        Based on the following snippets, generate detailed and coherent section content for the given
-                        section heading and research topic. The content should be comprehensive, informative, 
-                        and well-structured.
+                        Based on the following snippets, generate detailed and coherent section content for the below
+                        section heading and research topic. The content should be comprehensive and informative. 
+                        The content should be 200-300 words long, written in natural language, and in paragraph form.
 
                         Snippets: {snippets}
                         Section Heading: {section_heading}
@@ -311,18 +321,23 @@ class ResearchAgentGraph:
                     # Create constrained chain for section content
                     section_chain = ConstrainedLLMChain(
                         llm=self.llm,
-                        parser=self.section_content_parser,
-                        max_retries=2
+                        parser=self.section_content_parser
                     )
                     
                     # Invoke with constrained decoding
-                    section_result = section_chain.invoke({
-                        "snippets": combined_snippets, 
-                        "section_heading": title, 
-                        "topic": report_title,
-                        "format_instructions": self.section_content_parser.get_format_instructions(),
-                        "validation_guidance": ""
-                    })
+                    prompt_text = content_prompt.format(
+                        snippets=combined_snippets, 
+                        section_heading=title, 
+                        topic=report_title,
+                        format_instructions=self.section_content_parser.get_format_instructions(),
+                        validation_guidance=""
+                    )
+                    
+                    # Remove the "Human: " prefix that ChatPromptTemplate adds
+                    if prompt_text.startswith("Human: "):
+                        prompt_text = prompt_text[7:]
+                    
+                    section_result = section_chain.run(prompt_text)
                     
                     # Extract content from structured output
                     report_content += f"{section_result.content}\n\n"

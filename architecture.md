@@ -2,130 +2,164 @@
 
 ## Project Overview
 **Name:** Research Assistant Agent  
-**Description:** LangGraph-based AI research system using standard LangChain components for comprehensive research across all domains. Built with LLaMA 3.2 via Ollama, retrieval-augmented generation, and structured report generation with citations.
+**Description:** Modular multi-provider AI research system with extensible workflow nodes and pluggable LLM providers. Built with flexible architecture supporting Ollama, OpenAI, Anthropic, and future providers. Features interactive human review, structured generation, and configuration-driven workflows.
 
 **Goals:**
-- Unified research across all domains using standard LangChain retrievers and tools
-- LangGraph workflow orchestration with standard state management
-- Standard RAG implementation with LangChain components
+- Modular architecture enabling easy extension and maintenance
+- Multi-provider LLM support with seamless switching capabilities
+- Interactive workflows with human review and approval steps
+- Structured JSON-constrained output for reliable data processing
+- Configuration-driven workflow management
 
 ---
 
 
 ## Features
-- Standard LangChain/LangGraph architecture and components
-- Built-in ArxivRetriever for academic research
-- DuckDuckGoSearchResults tool for web search
-- Standard FAISS vector store with HuggingFace embeddings
-- Ollama LLM integration via langchain-ollama
-- Standard RAG chain implementation
-- LangGraph StateGraph with TypedDict state management
-- Structured report generation (Markdown format)
-- Standard LangChain message passing and state management
+- **Modular Architecture** - Pluggable components with clear interfaces
+- **Multi-LLM Provider Support** - Ollama, OpenAI, Anthropic with factory pattern
+- **Interactive Workflow** - Human review nodes for quality control
+- **Extensible Node System** - Easy addition of new workflow capabilities
+- **Structured Generation** - JSON-constrained output with Pydantic models
+- **State Management** - Centralized state validation and manipulation
+- **Configuration-Driven** - YAML-based workflow and provider configuration
+- **Enhanced UI** - Streamlit interface with provider selection and workflow info
 
 ---
 
 ## Software Architecture
-### Standard LangChain/LangGraph Design Patterns
-- **StateGraph Workflow:** Uses LangGraph's StateGraph with TypedDict state management
-- **Standard Components:** ArxivRetriever, DuckDuckGoSearchResults, FAISS, HuggingFaceEmbeddings
-- **Message Passing:** Standard LangChain message format (HumanMessage, AIMessage)
-- **RAG Chain:** Standard LangChain RAG implementation with retrievers and chains
-- **LLM Integration:** langchain-ollama for local LLaMA model integration
-- **State Management:** TypedDict with annotated message passing
+### Modular Design Patterns
+- **Provider Abstraction:** Factory pattern for LLM provider independence
+- **Node-Based Architecture:** Extensible workflow nodes with clear interfaces
+- **State Management:** Centralized validation and manipulation utilities
+- **Builder Pattern:** Flexible workflow construction from configuration
+- **Strategy Pattern:** Interchangeable node behaviors and provider implementations
 
-### Implementation Brief
-- **LangGraph Workflow:**
-  - StateGraph with standard node/edge definitions
-  - TypedDict state with annotated message lists
-  - Standard START/END node management
-- **LangChain Components:**
-  - ArxivRetriever for academic paper retrieval
-  - DuckDuckGoSearchResults for web search
-  - FAISS vectorstore with HuggingFace embeddings
-  - Standard prompt templates and output parsers
-- **RAG Implementation:**
-  - Standard retriever.as_retriever() pattern
-  - LangChain RunnablePassthrough for context flow
-  - ChatPromptTemplate for structured prompts
+### Implementation Architecture
+- **LLM Provider Layer:**
+  - Abstract base class defining provider interface
+  - Concrete implementations for Ollama, OpenAI, Anthropic
+  - Factory pattern for provider instantiation
+  - Seamless provider switching without code changes
+
+- **Node System Architecture:**
+  - BaseNode abstract class for all workflow nodes
+  - ConditionalNode for decision-making capabilities
+  - Specialized nodes: ReportPlanner, HumanReview, ReportGenerator
+  - Clear execute() interface for consistent behavior
+
+- **State Management Layer:**
+  - StateManager utility class for centralized operations
+  - AgentState TypedDict for type-safe state structure
+  - Validation methods for state integrity
+  - State transition and update utilities
+
+- **Graph Builder System:**
+  - WorkflowBuilder for dynamic graph construction
+  - ResearchWorkflowFactory for predefined workflows
+  - Configuration-driven node assembly
+  - Flexible routing and conditional logic
 
 ---
 
 
 ## Technologies
-- **LLM:** llama3.2 via langchain-ollama
-- **Orchestration:** LangGraph StateGraph
-- **Vector Store:** LangChain FAISS integration
-- **Embeddings:** HuggingFaceEmbeddings (all-MiniLM-L6-v2)
-- **Retrievers:** ArxivRetriever, FAISS retriever
-- **Tools:** DuckDuckGoSearchResults
-- **Prompts:** ChatPromptTemplate
-- **Chains:** Standard RAG chain with RunnablePassthrough
-- **State:** TypedDict with annotated message passing
-- **Frontend:** Streamlit
+- **LLM Providers:** Ollama (llama3.2), OpenAI, Anthropic
+- **Orchestration:** LangGraph StateGraph with modular node architecture  
+- **Structured Output:** Pydantic models with JSON-constrained generation
+- **State Management:** TypedDict with centralized validation utilities
+- **Configuration:** YAML-based settings with environment variable support
+- **Frontend:** Enhanced Streamlit UI with provider selection
+- **Data Validation:** Pydantic for type safety and validation
+- **Design Patterns:** Factory, Strategy, Builder, Observer patterns
 
 ---
 
 ## Components
-### LangGraph StateGraph Workflow
-- **Description:** Standard LangGraph StateGraph implementation
-- **State Management:** TypedDict with annotated message lists
-- **Nodes:** Standard LangChain component integration
-- **Edges:** Sequential flow with START/END management
 
-### Standard LangChain Components
-- **ArxivRetriever:** Built-in academic paper retrieval
-- **DuckDuckGoSearchResults:** Web search tool
-- **FAISS Vectorstore:** Document similarity search
-- **HuggingFaceEmbeddings:** Text embeddings
-- **OllamaLLM:** Local LLM integration
-- **ChatPromptTemplate:** Structured prompts
-- **RAG Chain:** Standard retrieval-augmented generation
+### LLM Provider System (`agents/llm_providers.py`)
+- **BaseLLMProvider:** Abstract interface for all providers
+- **OllamaProvider:** Local LLM integration with Ollama
+- **OpenAIProvider:** Cloud-based GPT models (planned)
+- **AnthropicProvider:** Claude model integration (planned)
+- **LLMProviderFactory:** Factory for provider instantiation
+- **Features:** Seamless switching, consistent interface, configuration-driven
 
-### Workflow Nodes
-1. **Query Analysis Node**
-   - Uses ChatPromptTemplate and OllamaLLM
-   - Analyzes query to determine domain and strategy
-   
-2. **Document Retrieval Node**
-   - ArxivRetriever for academic content
-   - DuckDuckGoSearchResults for web content
-   - Returns structured document list
-   
-3. **RAG Processing Node**
-   - Creates FAISS vectorstore from documents
-   - Standard retriever pattern
-   - RAG chain with context formatting
-   
-4. **Report Generation Node**
-   - Formats final markdown report
-   - Includes sources and citations
+### Node Architecture (`agents/nodes/`)
+- **BaseNode:** Foundation class for all workflow nodes
+- **ConditionalNode:** Decision-making node with routing logic
+- **ReportPlannerNode:** Creates structured research plans
+- **HumanReviewNode:** Interactive approval and feedback
+- **ReportGeneratorNode:** Final report compilation with structured output
+- **Features:** Extensible, type-safe, error handling, consistent interface
 
-### LangGraph Workflow
-- **Type:** Standard StateGraph with TypedDict state
-- **Description:** LangGraph workflow using standard LangChain components
+### State Management (`agents/state_manager.py`)
+- **StateManager:** Centralized state operations utility
+- **AgentState:** TypedDict defining state structure and types
+- **Validation:** State integrity checking and error reporting
+- **Utilities:** State updates, transitions, and manipulation helpers
+- **Features:** Type safety, centralized logic, error handling
+
+### Graph Builder (`agents/graph_builder.py`)
+- **WorkflowBuilder:** Dynamic graph construction from configuration
+- **ResearchWorkflowFactory:** Predefined workflow assembly
+- **Configuration:** YAML-driven workflow definitions
+- **Routing:** Conditional logic and decision points
+- **Features:** Flexible, configurable, extensible, maintainable
+
+### Enhanced Workflow Nodes
+1. **Report Planner Node**
+   - Structured research plan generation using Pydantic models
+   - JSON-constrained output for consistency
+   - Multi-provider LLM support with fallback handling
+   
+2. **Human Review Node**
+   - Interactive approval workflow with feedback collection
+   - State persistence for review decisions
+   - Configurable review requirements and timeout handling
+   
+3. **Report Generator Node**
+   - Structured content generation with section-based approach
+   - Multiple output formats (Markdown, JSON, structured data)
+   - Enhanced error handling with fallback content generation
+
+### Modular Workflow Architecture
+- **Type:** Modular StateGraph with extensible node system
+- **Description:** Flexible workflow supporting multiple providers and interactive steps
 - **Flow:**
-  1. **analyze_query:** LLM-based query analysis using ChatPromptTemplate
-  2. **retrieve_documents:** ArxivRetriever + DuckDuckGoSearchResults
-  3. **process_with_rag:** FAISS vectorstore + standard RAG chain
-  4. **generate_report:** Markdown report generation
-- **State Structure:**
+  1. **report_planner:** Generate structured research plan with approval workflow
+  2. **human_review:** Interactive review and feedback collection  
+  3. **report_generator:** Multi-section report generation with structured output
+  4. **conditional_routing:** Dynamic workflow paths based on review decisions
+
+- **Enhanced State Structure:**
   ```python
   class AgentState(TypedDict):
-      messages: Annotated[list, add_messages]
-      original_query: str
-      query_analysis: Dict[str, Any]
-      raw_documents: List[Dict[str, Any]]
-      retrieved_docs: List[str]
-      generated_text: str
-      markdown_report: str
-      timestamp: str
+      # Core workflow state
+      query: str
+      research_plan: Optional[Dict[str, Any]]
+      approved_plan: Optional[Dict[str, Any]] 
+      research_data: Dict[str, Any]
+      generated_report: Optional[str]
+      
+      # Interactive workflow state  
+      human_feedback: Optional[str]
+      approval_status: Optional[str]
+      review_iterations: int
+      
+      # Provider and execution state
+      llm_provider: str
+      execution_metadata: Dict[str, Any]
       errors: List[str]
+      timestamp: str
   ```
-- **Implementation:**
-  - Standard LangGraph node/edge definitions
-  - Error handling with state error tracking
-  - Execution logging and timing
+
+- **Implementation Features:**
+  - Modular node architecture with clear interfaces
+  - Multi-provider LLM support with runtime switching
+  - Interactive human review steps with state persistence
+  - Enhanced error handling with graceful fallbacks
+  - Structured output generation with Pydantic validation
+  - Configuration-driven workflow assembly
 
 ---
 
@@ -156,65 +190,149 @@
 
 ## Folder Structure
 ```
-research-assistant/
+research_agent/
 ├── README.md
-├── requirements.txt
+├── requirements.txt  
 ├── main.py
-├── config/
-│   └── settings.yaml
+├── architecture.md              # This document
 ├── agents/
-│   ├── graph.py                  # Standard LangGraph StateGraph
-│   └── __init__.py
-├── ui/
-│   └── app.py                    # Streamlit interface
+│   ├── __init__.py
+│   ├── llm_providers.py         # Multi-provider LLM abstraction
+│   ├── graph_refactored.py      # Main modular implementation
+│   ├── graph.py                 # Backward compatibility wrapper
+│   ├── state_manager.py         # State validation utilities
+│   ├── graph_builder.py         # Workflow construction
+│   ├── constrained_decoding.py  # JSON-constrained generation
+│   ├── pydentic_models.py       # Pydantic data models
+│   └── nodes/                   # Modular workflow nodes
+│       ├── __init__.py
+│       ├── base_node.py         # Abstract base classes
+│       ├── report_planner.py    # Research plan generation
+│       ├── human_review.py      # Interactive review workflow
+│       └── report_generator.py  # Structured report generation
 ├── config/
-│   └── settings.yaml
+│   ├── __init__.py
+│   ├── settings.py              # Configuration management
+│   └── settings.yaml            # Main configuration file
+├── ui/
+│   ├── __init__.py
+│   └── app.py                   # Enhanced Streamlit interface
+├── utils/
+│   ├── __init__.py
+│   └── debug_helpers.py         # Debugging utilities
 └── data/
-    └── processed/
+    ├── raw/                     # Raw research data
+    └── processed/               # Processed outputs
 ```
 
 ---
 
 ## Workflow Steps
-1. **analyze_query** - LLM-based query analysis using ChatPromptTemplate
-2. **retrieve_documents** - ArxivRetriever + DuckDuckGoSearchResults integration
-3. **process_with_rag** - FAISS vectorstore creation and RAG chain execution
-4. **generate_report** - Markdown report compilation with sources
+1. **report_planner** - Generate structured research plan using configurable LLM provider
+2. **human_review** - Interactive approval workflow with feedback collection
+3. **conditional_routing** - Dynamic path selection based on approval status  
+4. **report_generator** - Multi-section structured report generation with error handling
+5. **finalization** - Output formatting and metadata compilation
+
+
+![Agent Workflow Graph](docs/agent_graph.png)
 
 ---
 
 ## Data Flow
-- User provides query via Streamlit interface
-- LangGraph StateGraph executes workflow nodes
-- ArxivRetriever fetches academic papers
-- DuckDuckGoSearchResults fetches web content
-- FAISS vectorstore enables similarity search
-- Standard RAG chain generates analysis
-- Markdown report returned to interface
+- User provides query via enhanced Streamlit interface with provider selection
+- LLM Provider Factory creates appropriate provider instance (Ollama/OpenAI/Anthropic)
+- Report Planner Node generates structured research plan using selected provider
+- Human Review Node presents plan for interactive approval with feedback collection
+- Conditional routing determines next steps based on approval status
+- Report Generator Node creates multi-section structured output with error handling
+- State Manager validates and persists state throughout workflow execution
+- Enhanced UI displays results with provider info and workflow metadata
 
 ---
 
-## Standard LangChain Integration Points
-- **ArxivRetriever:** Built-in academic paper retrieval
-- **DuckDuckGoSearchResults:** Web search functionality
-- **FAISS:** Vector similarity search
-- **HuggingFaceEmbeddings:** Text embeddings
-- **OllamaLLM:** Local LLaMA integration
-- **ChatPromptTemplate:** Structured prompts
-- **RunnablePassthrough:** Chain context flow
-- **StateGraph:** LangGraph workflow orchestration
+## Integration and Extension Points
+
+### LLM Provider Integration
+- **Provider Interface:** Abstract base class for consistent provider behavior
+- **Factory Pattern:** Runtime provider selection and instantiation
+- **Configuration:** YAML-driven provider settings and credentials  
+- **Extensibility:** Easy addition of new providers (Cohere, local models, etc.)
+
+### Node System Integration  
+- **Base Classes:** Foundation interfaces for workflow nodes
+- **Extension Pattern:** Clear guidelines for adding new node types
+- **State Interface:** Standardized state manipulation and validation
+- **Error Handling:** Consistent error propagation and recovery patterns
+
+### Configuration Integration
+- **Settings Management:** Centralized YAML configuration with validation
+- **Environment Variables:** Runtime configuration override capabilities
+- **Provider Settings:** Per-provider configuration with fallback defaults
+- **Workflow Config:** Dynamic workflow assembly from configuration files
+
+### UI Integration
+- **Provider Selection:** Runtime switching between available providers
+- **Workflow Monitoring:** Real-time state and progress visualization  
+- **Interactive Elements:** Human review and feedback collection interfaces
+- **Configuration Display:** Current settings and provider information
 
 ---
 
 ## Extensibility
-- Add new LangChain retrievers (PubMedRetriever, WikipediaRetriever)
-- Integrate additional LangChain tools
-- Extend StateGraph with conditional routing
-- Add new LangChain document loaders
+
+### Adding New LLM Providers
+1. **Implement Provider Interface:**
+   ```python
+   class CustomProvider(BaseLLMProvider):
+       def __init__(self, config):
+           # Provider-specific initialization
+       
+       def invoke(self, prompt: str) -> str:
+           # Provider-specific inference logic
+   ```
+
+2. **Register in Factory:**
+   ```python
+   # Add to LLMProviderFactory.create_provider()
+   elif provider_type == "custom":
+       return CustomProvider(config)
+   ```
+
+3. **Update Configuration:**
+   ```yaml
+   # Add to settings.yaml
+   custom_provider:
+     api_key: "your-key"
+     model: "custom-model"
+   ```
+
+### Adding New Workflow Nodes
+1. **Extend Base Classes:**
+   ```python
+   class CustomAnalysisNode(BaseNode):
+       def execute(self, state: AgentState) -> Dict[str, Any]:
+           # Custom analysis logic
+           return {"analysis_results": data}
+   ```
+
+2. **Register in Workflow:**
+   - Add to workflow configuration
+   - Update graph builder routing
+   - Define state transitions
+
+### Configuration Extensions
+- **Provider Settings:** Add new provider configurations
+- **Workflow Definitions:** Create custom workflow YAML files  
+- **Node Parameters:** Configurable node behavior and parameters
+- **UI Customization:** Streamlit interface modifications
 
 ---
 
 ## Future Extensions
-- LangSmith for tracing and monitoring
-- Additional LangChain community integrations
-- Multi-agent LangGraph workflows
+
+### Planned Enhancements
+- **Advanced RAG:** Vector database integration with semantic search
+- **Caching Layer:** Response and state caching for efficiency
+- **Tool Calling:** Integration with graph generation for data analysis
+- **Advanced Monitoring:** Comprehensive logging and metrics collection

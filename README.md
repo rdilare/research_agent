@@ -1,27 +1,22 @@
 # Research Assistant Agent
 
-## Standard LangChain/LangGraph Implementation
+## Modular Multi-Provider Research System
 
-A research assistant built using ** LangChain and LangGraph ** for comprehensive research across domains.
+A scalable research assistant with **modular architecture** supporting multiple LLM providers and extensible workflow nodes.
 
 ### Features
 
-- **Standard LangGraph StateGraph** workflow orchestration
-- **ArxivRetriever** for academic paper retrieval
-- **DuckDuckGoSearchResults** for web search
-- **FAISS vectorstore** with HuggingFace embeddings
-- **Ollama LLM** integration via langchain-ollama
-- **Standard RAG chain** implementation
-- **Streamlit** web interface
+- **Modular Architecture** - Pluggable components for maximum flexibility
+- **Multi-LLM Support** - Easy switching between Ollama, OpenAI, Anthropic
+- **Interactive Workflow** - Human review and approval steps
+- **Extensible Nodes** - Add new research capabilities easily  
+- **Structured Generation** - JSON-constrained llm output for reliability
+- **Web Interface** - Streamlit UI for easy interaction
+- **Configuration-Driven** - YAML-based workflow management
 
-### Architecture
+### Agent Graph
+![Agent Graph](docs/agent_graph.png)
 
-The system uses standard LangChain/LangGraph patterns:
-
-1. **StateGraph Workflow** - LangGraph StateGraph with TypedDict state management
-2. **Standard Components** - Built-in LangChain retrievers and tools
-3. **RAG Chain** - Standard retrieval-augmented generation
-4. **Message Passing** - LangChain message format (HumanMessage, AIMessage)
 
 ### Quick Start
 
@@ -30,37 +25,95 @@ The system uses standard LangChain/LangGraph patterns:
    pip install -r requirements.txt
    ```
 
-2. **Start Ollama server:**
+2. **Setup LLM Provider:**
    ```bash
+   # For Ollama (default)
    ollama serve
    ollama pull llama3.2
+   
+   # For OpenAI (coming soon)
+   export OPENAI_API_KEY="your-key"
+   
+   # For Anthropic (coming soon)  
+   export ANTHROPIC_API_KEY="your-key"
    ```
 
 3. **Run the application:**
    ```bash
+   # Web interface
    streamlit run main.py
    ```
 
-### Workflow
-
-1. **analyze_query** - LLM-based query analysis
-2. **retrieve_documents** - ArxivRetriever + DuckDuckGoSearchResults
-3. **process_with_rag** - FAISS vectorstore + standard RAG chain
-4. **generate_report** - Markdown report generation
-
-
 ### Configuration
 
-Edit `config/settings.yaml` to customize:
-
+#### Provider Settings (`config/settings.yaml`)
 ```yaml
-llm:
+llm_provider:
+  type: "ollama"  # or "openai", "anthropic"
+  
+ollama:
   model: "llama3.2"
   base_url: "http://localhost:11434"
+  
+openai:
+  model: "gpt-4"
+  temperature: 0.7
+  
+anthropic:
+  model: "claude-3-sonnet"
+  temperature: 0.7
 
-embeddings:
-  model: "all-MiniLM-L6-v2"
-
-retrieval:
-  max_results: 5
+workflow:
+  enable_human_review: true
+  max_retries: 3
+  timeout: 300
 ```
+
+#### Adding Custom Nodes
+```python
+from agents.nodes.base_node import BaseNode
+
+class CustomAnalysisNode(BaseNode):
+    def __init__(self, llm_provider):
+        super().__init__(
+            name="custom_analysis",
+            llm_provider=llm_provider
+        )
+    
+    def execute(self, state):
+        # Your custom logic here
+        return {"custom_results": "analysis_data"}
+```
+
+### Extending the System
+
+#### Add New LLM Provider
+1. Implement `BaseLLMProvider` interface
+2. Add to `LLMProviderFactory`  
+3. Update configuration schema
+
+#### Add New Node Type
+1. Extend `BaseNode` or `ConditionalNode`
+2. Implement `execute()` method
+3. Register in workflow configuration
+
+### Further Details
+
+For a deeper dive into the system's architecture, refer to [Architecture Details](architecture.md). This document provides an in-depth explanation of the modular design, workflow orchestration, and integration with multiple LLM providers.
+
+
+### Troubleshooting
+
+#### Common Issues
+
+**LLM Provider Connection**
+```bash
+# Check Ollama status
+ollama list
+curl http://localhost:11434/api/version
+```
+
+**Configuration Issues**
+- Verify `config/settings.yaml` syntax
+- Check provider-specific environment variables
+- Ensure model names match available models

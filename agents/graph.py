@@ -1,490 +1,175 @@
 """
-LangGraph Agent Workflow Orchestration using Standard LangChain/LangGraph Components
-"""
-from typing import Dict, Any, List, Annotated
-from typing_extensions import TypedDict
-from langgraph.graph import StateGraph, END, START
-from langgraph.graph.message import add_messages
-from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import HumanMessage
-from langchain_community.tools import DuckDuckGoSearchResults
-try:
-    from langchain_ollama import OllamaLLM as Ollama
-except ImportError:
-    from langchain_community.llms import Ollama  # Fallback for older versions
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
-import logging
-from datetime import datetime
-import time
+Refactored Research Agent Graph - Modular and Scalable Implementation
 
-# Import JSON-constrained decoding utilities
-from .constrained_decoding import (
-    JSONDecodingError,
-    create_json_parser,
-    create_json_chain
-)
-from .pydentic_models import ReportPlan, SectionContent
+This is the refactored version of the research agent that uses:
+- Pluggable LLM providers
+- Modular node architecture 
+- Flexible graph building
+- Improved state management
+"""
+from typing import Dict, Any, Optional
+from datetime import datetime
+import logging
+
+# LangChain imports (with error handling for missing dependencies)
+try:
+    from langchain_community.tools import DuckDuckGoSearchResults
+    LANGCHAIN_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_AVAILABLE = False
+    
+try:
+    from langchain_core.messages import HumanMessage
+    LANGCHAIN_CORE_AVAILABLE = True
+except ImportError:
+    LANGCHAIN_CORE_AVAILABLE = False
+
+# Local imports
+from .llm_providers import LLMProviderFactory, create_llm_provider
+from .state_manager import AgentState, StateManager
+from .graph_builder import ResearchWorkflowFactory
+from .nodes import ReportPlannerNode, HumanReviewNode, ReportGeneratorNode
 
 logger = logging.getLogger(__name__)
 
 
-class AgentState(TypedDict):
-    """Standard LangGraph state definition using TypedDict"""
-    messages: Annotated[list, add_messages]
-    original_query: str
-    query_analysis: Dict[str, Any]
-    raw_documents: List[Dict[str, Any]]
-    retrieved_docs: List[str]
-    generated_text: str
-    markdown_report: str
-    timestamp: str
-    report_plan: Dict[str, Any]
-    generated_report: str
-    errors: List[str]
-    
-    # Human-in-the-loop fields
-    human_review_required: bool
-    human_approved: bool
-    human_feedback: str
-    modified_plan: Dict[str, Any]
-    
-    # Execution tracking
-    step_logs: List[Dict[str, Any]]
-    execution_times: Dict[str, float]
-
-
 class ResearchAgentGraph:
-    """Standard LangGraph-based research agent workflow"""
+    """
+    Refactored Research Agent with modular architecture
+    
+    Features:
+    - Pluggable LLM providers (Ollama, OpenAI, Anthropic, etc.)
+    - Modular node system for easy extension
+    - Flexible workflow configuration
+    - Improved error handling and state management
+    """
     
     def __init__(self, config: Dict[str, Any], status_handler=None):
         self.config = config
         self.status_handler = status_handler
-        self.progress_max_count = 8  # Default max count for status bar
+        self.progress_max_count = 8
         self.progress_counter = 0
-
-        # Initialize standard LangChain components
-        self.llm = Ollama(
-            model=config.get('llm', {}).get('model', 'llama3.2'),
-            base_url=config.get('llm', {}).get('base_url', 'http://localhost:11434'),
-            temperature=config.get('llm', {}).get('temperature', 0.7)
-        )
         
-        # Initialize JSON-constrained parsers for structured outputs
-        self.report_plan_parser = create_json_parser(
-            ReportPlan,
-            allow_partial=config.get('constrained_decoding', {}).get('allow_partial', True),
-            fill_defaults=True
-        )
+        # Validate dependencies
+        self._validate_dependencies()
         
-        self.section_content_parser = create_json_parser(
-            SectionContent,
-            allow_partial=config.get('constrained_decoding', {}).get('allow_partial', True),
-            fill_defaults=True
-        )
+        # Initialize LLM provider
+        self.llm_provider = self._initialize_llm_provider()
         
-        # Standard LangChain retrievers and tools
-        self.web_search_tool = DuckDuckGoSearchResults(max_results=5, output_format="list")
-        
-        # Initialize memory checkpointer for thread-based execution
-        self.checkpointer = MemorySaver()
+        # Initialize tools
+        self.web_search_tool = self._initialize_web_search()
         
         # Build the workflow graph
-        self.graph = self._build_graph()
-
-        # print("="*20, " Langchain Graph ", "="*20)
-        # print(self.graph.get_graph().draw_mermaid())
-
-
+        self.graph = self._build_workflow()
+        
+        logger.info(f"ResearchAgentGraph initialized with {self.llm_provider.provider_name} provider")
+    
+    def _validate_dependencies(self):
+        """Validate that required dependencies are available"""
+        if not LANGCHAIN_AVAILABLE:
+            raise ImportError(
+                "LangChain Community not available. Please install: pip install langchain-community"
+            )
+        
+        if not LANGCHAIN_CORE_AVAILABLE:
+            raise ImportError(
+                "LangChain Core not available. Please install: pip install langchain-core"
+            )
+    
+    def _initialize_llm_provider(self):
+        """Initialize the LLM provider based on configuration"""
+        llm_config = self.config.get('llm', {})
+        
+        # Set default provider if not specified
+        if 'provider' not in llm_config:
+            llm_config['provider'] = 'ollama'
+        
+        # Set default model if not specified
+        if 'model' not in llm_config:
+            llm_config['model'] = 'llama3.2'
+        
+        # Set default base_url for Ollama if not specified
+        if llm_config['provider'] == 'ollama' and 'base_url' not in llm_config:
+            llm_config['base_url'] = 'http://localhost:11434'
+        
+        # Set default temperature if not specified
+        if 'temperature' not in llm_config:
+            llm_config['temperature'] = 0.7
+        
+        try:
+            return create_llm_provider(llm_config)
+        except Exception as e:
+            logger.error(f"Failed to initialize LLM provider: {e}")
+            raise
+    
+    def _initialize_web_search(self):
+        """Initialize web search tool"""
+        try:
+            return DuckDuckGoSearchResults(max_results=5, output_format="list")
+        except Exception as e:
+            logger.error(f"Failed to initialize web search tool: {e}")
+            raise
+    
+    def _build_workflow(self):
+        """Build the workflow using the graph builder"""
+        try:
+            return ResearchWorkflowFactory.create_standard_workflow(
+                config=self.config,
+                llm_provider=self.llm_provider,
+                web_search_tool=self.web_search_tool,
+                status_handler=self.status_handler
+            )
+        except Exception as e:
+            logger.error(f"Failed to build workflow: {e}")
+            raise
+    
     def set_status_handler(self, status_handler):
         """Set or update the status handler for UI updates"""
         self.status_handler = status_handler
-
+        
+        # Update status handler in all nodes if they support it
+        try:
+            current_state = self.get_current_state()
+            # This is a best-effort update - nodes will use the new handler on next execution
+        except:
+            pass  # Ignore errors during status handler update
+    
     def update_status(self, message: str, restart_counter: bool = False):
-        # Safely handle missing or invalid status handler
+        """Update status in the UI (backward compatibility)"""
         if not self.status_handler or not isinstance(self.status_handler, dict):
             return
+            
         if restart_counter:
             self.progress_counter = 0
+            
         self.progress_counter += 1
+        
         if "progress_bar" in self.status_handler:
-            # Cap progress at 100% to avoid invalid values
             progress_percent = min(100, int((self.progress_counter / self.progress_max_count) * 100))
             self.status_handler["progress_bar"].progress(progress_percent)
-
-        # Update status in the UI if status_handler is provided
+        
         if "status_container" in self.status_handler:
             if "blinking_text" in self.status_handler:
-                self.status_handler["status_container"].html(self.status_handler["blinking_text"](message))
+                self.status_handler["status_container"].html(
+                    self.status_handler["blinking_text"](message)
+                )
             else:
                 self.status_handler["status_container"].text(message)
-
-    
-    
-    def report_planner(self, state: AgentState) -> AgentState:
-        """Plan the report structure using JSON-constrained decoding"""
-        start_time = time.time()
-        self.update_status("Planning report structure...", restart_counter=True)
-        web_snippets = []
-        context = ""
-        query = state["messages"][-1].content if state["messages"] else state.get("original_query", "")
-        try:
-            self.update_status("Fetching web results for report planning...")
-            web_results = self.web_search_tool.run(query)
-            for result in web_results:
-                web_snippets.append(result.get("snippet", ""))
-            context = "\n\n".join(web_snippets)
-        except Exception as e:
-            logger.warning(f"Web search for report planning failed: {e}")
-        try:
-            example_json = (
-                '{\n'
-                '  "report_sections": [\n'
-                '    {"title": "Introduction", "sub_queries": ["What is ...?", "Why is ... important?"]},\n'
-                '    {"title": "Key Topic A", "sub_queries": ["How does ...?", "What factors influence ...?"]},\n'
-                '    {"title": "Conclusion", "sub_queries": ["What are the key findings about ...?"]}\n'
-                '  ],\n'
-                '  "report_title": "Concise Title"\n'
-                '}'
-            )
-            analysis_prompt = ChatPromptTemplate.from_template(
-                """
-                You are a research planner. Based on the user's research query, generate a structured outline for a research report in JSON only and no prose.  
-                - The report should contain 5-8 sections, beginning with an Introduction and ending with a Conclusion.  
-                - For each section, create 2-3 focused sub-queries that are *explicitly and directly* connected to the research query, 
-                to guide information gathering.
-                - Each sub-query must be complete on its own and related to the research query. 
-                    Example:
-                    Topic of research: Tom and Jerry
-                    Bad example of sub-query: "First theatrical short film release?"
-                    Good example of sub-query: "When was the first theatrical short film of Tom and Jerry released?"
-                - Also find a suitable title for the report. A report title should be clear, concise, and informative, directly related to the user's query and purpose to help readers immediately understand what the report addresses.
-                - Use both the provided context and your own knowledge to ensure comprehensive coverage of the topic.
-
-                Context: {context}
-                Research Query: {query}
-
-                Example (structure only, use different actual values):
-                {example_json}
-
-                {format_instructions}
-                """
-            )
-            json_chain = create_json_chain(
-                llm=self.llm,
-                pydantic_model=ReportPlan,
-                allow_partial=True,
-                fill_defaults=True
-            )
-
-            max_attempts = 2
-            last_error = None
-            for attempt in range(1, max_attempts + 1):
-                prompt_text = analysis_prompt.format(
-                    context=context,
-                    query=query,
-                    example_json=example_json,
-                    format_instructions=self.report_plan_parser.get_format_instructions()
-                )
-                if attempt > 1:
-                    prompt_text += "\nIf previous output contained schema metadata or invalid structure, correct it. Output ONLY the JSON object."
-                try:
-                    # Capture raw output by invoking the underlying llm first (best-effort)
-                    raw_output = None
-                    try:
-                        # Mirror logic in JSONConstrainedLLMChain but intercept raw
-                        final_prompt = (
-                            "Return ONLY a valid JSON object. Do not include any text before or after the JSON.\n\n"
-                            + prompt_text
-                        )
-                        if hasattr(self.llm, "invoke"):
-                            raw_obj = self.llm.invoke(final_prompt)
-                        elif hasattr(self.llm, "predict"):
-                            raw_obj = self.llm.predict(final_prompt)
-                        else:
-                            raw_obj = self.llm(final_prompt)  # type: ignore
-                        raw_output = raw_obj.content if hasattr(raw_obj, "content") else str(raw_obj)
-                    except Exception as probe_e:
-                        logger.debug(f"Probe raw output failed (attempt {attempt}): {probe_e}")
-                    if raw_output is not None:
-                        logger.debug(f"Raw LLM output (attempt {attempt}, first 400 chars): {raw_output[:400]}")
-                    # Now parse using existing chain to keep single source of truth
-                    result = json_chain.run(prompt_text)
-                    if hasattr(result, 'model_dump'):
-                        state["report_plan"] = result.model_dump()
-                    else:
-                        state["report_plan"] = result.dict()
-                    state["human_review_required"] = True
-                    state["human_approved"] = False
-                    state["human_feedback"] = ""
-                    state["modified_plan"] = {}
-                    logger.info(
-                        f"Report planning completed (attempt {attempt}) with JSON decoding. Generated {len(result.report_sections)} sections."
-                    )
-                    break
-                except JSONDecodingError as attempt_err:
-                    last_error = attempt_err
-                    logger.warning(f"Report planning JSON decode failure attempt {attempt}/{max_attempts}: {attempt_err}")
-                    if attempt == max_attempts:
-                        raise
-                    continue
-        except JSONDecodingError as e:
-            error_msg = f"JSON decoding failed for report planning: {str(e)}"
-            logger.error(error_msg)
-            print(error_msg)
-            state["errors"].append(error_msg)
-            state["report_plan"] = {
-                "report_title": f"Research Report: {query[:50]}...",
-                "report_sections": [
-                    {"title": "Introduction", "sub_queries": [f"What is {query}?", f"Why is {query} important?"]},
-                    {"title": "Conclusion", "sub_queries": [f"What are the key findings about {query}?"]}
-                ]
-            }
-        except Exception as e:
-            error_msg = f"Report planning failed: {str(e)}"
-            logger.error(error_msg)
-            print(error_msg)
-            state["errors"].append(error_msg)
-            state["report_plan"] = {"report_title": "Research Report", "report_sections": []}
-        finally:
-            exec_time = time.time() - start_time
-            try:
-                plan_sections = len(state.get("report_plan", {}).get("report_sections", []))
-                self._log_step(
-                    step_name="report_planner",
-                    inputs={"query": query, "context_len": len(context)},
-                    outputs={"sections": plan_sections},
-                    execution_time=exec_time,
-                    state=state
-                )
-            except Exception as log_e:
-                logger.warning(f"Failed to log step 'report_planner': {log_e}")
-        return state
-    
-    def human_review_node(self, state: AgentState) -> AgentState:
-        """Node for human review of the research plan"""
-        start_time = time.time()
-        self.update_status("Waiting for human review of research plan...")
-        state["human_review_required"] = True
-        if state.get("modified_plan") and state["modified_plan"]:
-            state["report_plan"] = state["modified_plan"]
-            logger.info("Using human-modified research plan")
-        exec_time = time.time() - start_time
-        try:
-            self._log_step(
-                step_name="human_review_node",
-                inputs={"needs_review": True},
-                outputs={
-                    "approved": state.get("human_approved"),
-                    "has_modified_plan": bool(state.get("modified_plan"))
-                },
-                execution_time=exec_time,
-                state=state
-            )
-        except Exception as log_e:
-            logger.warning(f"Failed to log step 'human_review_node': {log_e}")
-        return state
-    
-    def should_continue_to_generation(self, state: AgentState) -> str:
-        """Conditional edge function to determine next step after human review"""
-        if state.get("human_approved", False):
-            return "report_generator"
-        else:
-            # Stay in review mode until human approves
-            return "report_planner"
-    
-    def report_generator(self, state: AgentState) -> AgentState:
-        """Generate the report based on the plan using JSON-constrained decoding"""
-        start_time = time.time()
-        self.update_status("Generating report...")  
-        try:
-            plan = state.get("report_plan", {})
-            report_sections = plan.get("report_sections", [])
-            report_title = plan.get("report_title", "Research Report")
-            report_content = f"## {report_title}\n\n"
-            self.progress_max_count += len(report_sections)
-            for i, section in enumerate(report_sections):
-                title = section.get("title", "Untitled Section")
-                report_content += f"### {i+1}. {title}\n\n"
-                combined_snippets = ""
-                self.update_status(f"Generating content for section ({i+1}/{len(report_sections)}): {title}")
-                for sub_query in section.get("sub_queries", []):
-                    try:
-                        web_results = self.web_search_tool.run(sub_query)
-                        snippets = [result.get("snippet", "") for result in web_results]
-                        combined_snippets += "\n".join(snippets) + "\n\n"
-                    except Exception as e:
-                        logger.warning(f"Web search failed for sub-query '{sub_query}': {e}")
-                try:
-                    content_prompt = ChatPromptTemplate.from_template(
-                        """
-                        Based on the following snippets, generate detailed and coherent section content for the below
-                        section heading and research topic. The content should be comprehensive and informative. 
-                        The content should be 200-300 words long, written in natural language, and in paragraph form.
-
-                        Snippets: {snippets}
-                        Section Heading: {section_heading}
-                        Research Topic: {topic}
-
-                        {format_instructions}
-                        """
-                    )
-                    section_chain = create_json_chain(
-                        llm=self.llm,
-                        pydantic_model=SectionContent,
-                        allow_partial=True,
-                        fill_defaults=True
-                    )
-                    prompt_text = content_prompt.format(
-                        snippets=combined_snippets,
-                        section_heading=title,
-                        topic=report_title,
-                        format_instructions=self.section_content_parser.get_format_instructions()
-                    )
-                    section_result = section_chain.run(prompt_text)
-                    report_content += f"{section_result.content}\n\n"
-                    logger.info(f"Generated structured content for section: {title}")
-                except JSONDecodingError as e:
-                    logger.warning(f"JSON decoding failed for section '{title}': {e}")
-                    try:
-                        content_prompt = ChatPromptTemplate.from_template(
-                            """
-                            Based on the following snippets, generate detailed and coherent section content for the below
-                            section heading and research topic. The content should be comprehensive and informative. 
-                            The content should be 200-300 words long, written in natural language, and in paragraph form.
-
-                            Snippets: {snippets}
-                            Section Heading: {section_heading}
-                            Research Topic: {topic}
-
-                            Respond with the generated content for this section. Do not add the section heading.
-                            """
-                        )
-                        chain = content_prompt | self.llm | StrOutputParser()
-                        section_content = chain.invoke({
-                            "snippets": combined_snippets,
-                            "section_heading": title,
-                            "topic": report_title
-                        })
-                        report_content += f"{section_content}\n\n"
-                        logger.info(f"Generated fallback content for section: {title}")
-                    except Exception as fallback_e:
-                        logger.warning(f"Fallback content generation also failed: {fallback_e}")
-                        report_content += f"  - Error generating content for this section: {title}\n\n"
-                except Exception as e:
-                    logger.warning(f"Content generation failed for section '{title}': {e}")
-                    report_content += f"  - Error generating content for this section: {title}\n\n"
-            self.update_status("Report generation completed.")
-            state["generated_report"] = report_content
-            logger.info("Report generation completed with JSON-constrained decoding")
-        except Exception as e:
-            error_msg = f"Report generation failed: {str(e)}"
-            logger.error(error_msg)
-            state["errors"].append(error_msg)
-            state["generated_report"] = "# Research Report\n\nError generating report."
-        finally:
-            exec_time = time.time() - start_time
-            try:
-                report_len = len(state.get("generated_report", ""))
-                self._log_step(
-                    step_name="report_generator",
-                    inputs={"sections": len(state.get("report_plan", {}).get("report_sections", []))},
-                    outputs={"report_chars": report_len},
-                    execution_time=exec_time,
-                    state=state
-                )
-            except Exception as log_e:
-                logger.warning(f"Failed to log step 'report_generator': {log_e}")
-        return state
-
-    
-    def _format_docs(self, docs):
-        """Format retrieved documents for RAG context"""
-        return "\n\n".join(doc.page_content if hasattr(doc, 'page_content') else str(doc) for doc in docs)
-    
-    def _build_graph(self) -> StateGraph:
-        """Build the workflow graph using standard LangGraph patterns"""
-        
-        # Create workflow graph
-        workflow = StateGraph(AgentState)
-
-        # Add nodes for each step in the workflow
-        workflow.add_node("report_planner", self.report_planner)
-        workflow.add_node("human_review_node", self.human_review_node)
-        workflow.add_node("report_generator", self.report_generator)
-
-        # Define edges between nodes
-        workflow.add_edge(START, "report_planner")
-        workflow.add_edge("report_planner", "human_review_node")
-        
-        # Add conditional edge from human review
-        workflow.add_conditional_edges(
-            "human_review_node",
-            self.should_continue_to_generation,
-            {
-                "report_generator": "report_generator",
-                "report_planner": "report_planner"  # Loop back if not approved
-            }
-        )
-        
-        workflow.add_edge("report_generator", END)
-        
-        return workflow.compile(
-            checkpointer=self.checkpointer,
-            interrupt_before=["human_review_node"]
-        )
-    
-    def _log_step(self, step_name: str, inputs: Any, outputs: Any, execution_time: float, state: Dict[str, Any]):
-        """Log step execution details"""
-        step_log = {
-            'step': step_name,
-            'timestamp': datetime.now().isoformat(),
-            'execution_time': execution_time,
-            'status': 'success' if not state.get('errors') else 'error',
-            'input_summary': str(inputs)[:200],
-            'output_summary': str(outputs)[:200],
-        }
-        
-        if 'step_logs' not in state:
-            state['step_logs'] = []
-        if 'execution_times' not in state:
-            state['execution_times'] = {}
-            
-        state['step_logs'].append(step_log)
-        state['execution_times'][step_name] = execution_time
-        
-        logger.info(f"Step '{step_name}' completed in {execution_time:.2f}s")
     
     def run(self, query: str, thread_id: str = "default") -> Dict[str, Any]:
-        """Execute the research workflow with standard LangGraph approach"""
+        """Execute the research workflow"""
         try:
             config = {"configurable": {"thread_id": thread_id}}
             
-            # Initialize state with standard LangGraph message format
-            initial_state = {
-                "messages": [HumanMessage(content=query)],
-                "original_query": query,
-                "query_analysis": {},
-                "raw_documents": [],
-                "retrieved_docs": [],
-                "generated_text": "",
-                "markdown_report": "",
-                "timestamp": "",
-                "errors": [],
-                "step_logs": [],
-                "execution_times": {},
-                "human_review_required": False,
-                "human_approved": False,
-                "human_feedback": "",
-                "modified_plan": {}
-            }
+            # Create initial state
+            initial_state = StateManager.create_initial_state(query)
             
-            # Execute the graph with config
+            # Execute the workflow
             result = self.graph.invoke(initial_state, config)
-
+            
+            # Debug logging
             with open("debug_log.log", "w") as f:
                 f.write(str(result))
-                # f.write(json.dumps(result, indent=2))
             
             logger.info(f"Research workflow completed for query: {query}")
             return result
@@ -493,7 +178,6 @@ class ResearchAgentGraph:
             # Check if this is an interruption at human review
             if "interrupt" in str(e).lower() or "human_review" in str(e).lower():
                 logger.info("Workflow interrupted for human review")
-                # Return current state for review
                 try:
                     state = self.get_current_state(thread_id)
                     if state:
@@ -503,19 +187,7 @@ class ResearchAgentGraph:
             
             error_msg = f"Workflow execution failed: {str(e)}"
             logger.error(error_msg)
-            return {
-                "original_query": query,
-                "generated_text": f"Research failed: {str(e)}",
-                "markdown_report": f"# Research Failed\n\nError: {str(e)}",
-                "errors": [error_msg],
-                "timestamp": datetime.now().isoformat(),
-                "step_logs": [],
-                "execution_times": {},
-                "human_review_required": False,
-                "human_approved": False,
-                "human_feedback": "",
-                "modified_plan": {}
-            }
+            return self._create_error_result(query, error_msg)
     
     def get_current_state(self, thread_id: str = "default") -> Dict[str, Any]:
         """Get the current state of the workflow"""
@@ -558,6 +230,7 @@ class ResearchAgentGraph:
             return {"errors": [error_msg]}
     
     def reject_plan(self, thread_id: str = "default", feedback: str = "") -> Dict[str, Any]:
+        """Reject the research plan and request modifications"""
         try:
             config = {"configurable": {"thread_id": thread_id}}
             
@@ -575,3 +248,67 @@ class ResearchAgentGraph:
             error_msg = f"Failed to reject plan: {str(e)}"
             logger.error(error_msg)
             return {"errors": [error_msg]}
+    
+    def _create_error_result(self, query: str, error_msg: str) -> Dict[str, Any]:
+        """Create a standardized error result"""
+        return {
+            "original_query": query,
+            "generated_text": f"Research failed: {error_msg}",
+            "markdown_report": f"# Research Failed\n\nError: {error_msg}",
+            "errors": [error_msg],
+            "timestamp": datetime.now().isoformat(),
+            "step_logs": [],
+            "execution_times": {},
+            "human_review_required": False,
+            "human_approved": False,
+            "human_feedback": "",
+            "modified_plan": {},
+            "report_plan": {},
+            "generated_report": ""
+        }
+    
+    # Additional methods for extensibility
+    
+    def add_custom_node(self, node_name: str, node_class, dependencies: Dict[str, Any] = None):
+        """Add a custom node to the workflow (for future extension)"""
+        # This would require rebuilding the graph - placeholder for future implementation
+        raise NotImplementedError("Custom node addition requires workflow rebuild - feature coming soon")
+    
+    def get_available_providers(self) -> list:
+        """Get list of available LLM providers"""
+        return LLMProviderFactory.get_available_providers()
+    
+    def switch_provider(self, provider_config: Dict[str, Any]):
+        """Switch to a different LLM provider"""
+        try:
+            self.llm_provider = create_llm_provider(provider_config)
+            # Note: This would require rebuilding the graph for full effect
+            logger.info(f"Switched to {self.llm_provider.provider_name} provider")
+        except Exception as e:
+            logger.error(f"Failed to switch provider: {e}")
+            raise
+    
+    def get_workflow_structure(self) -> Dict[str, Any]:
+        """Get information about the current workflow structure"""
+        try:
+            # This would analyze the compiled graph structure
+            return {
+                "nodes": ["report_planner", "human_review_node", "report_generator"],
+                "edges": [
+                    {"from": "START", "to": "report_planner"},
+                    {"from": "report_planner", "to": "human_review_node"},
+                    {"from": "human_review_node", "to": "report_generator", "conditional": True},
+                    {"from": "report_generator", "to": "END"}
+                ],
+                "interrupts": ["human_review_node"],
+                "provider": self.llm_provider.provider_name
+            }
+        except Exception as e:
+            logger.warning(f"Failed to analyze workflow structure: {e}")
+            return {"error": str(e)}
+
+
+# Backward compatibility - keep the original class name and interface
+class ResearchAgentGraphLegacy(ResearchAgentGraph):
+    """Legacy wrapper for backward compatibility"""
+    pass

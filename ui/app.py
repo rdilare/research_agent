@@ -12,7 +12,7 @@ import tempfile
 from markdown_pdf import MarkdownPdf, Section
 
 
-# Import the standard LangGraph agent
+# Import the refactored research agent directly
 from agents.graph import ResearchAgentGraph
 
 logger = logging.getLogger(__name__)
@@ -45,20 +45,25 @@ def load_config():
         # Default configuration for standard LangChain setup
         return {
             "llm": {
+                "provider": "ollama",  # Default to Ollama
                 "model": "llama3.2",
-                "base_url": "http://localhost:11434"
+                "base_url": "http://localhost:11434",
+                "temperature": 0.7
             },
             "embeddings": {
                 "model": "all-MiniLM-L6-v2"
             },
             "logging": {
                 "level": "INFO"
+            },
+            "search": {
+                "max_results": 5
             }
         }
 
 
 def blinking_text(text, should_blink=True):
-    
+    """Create blinking text animation for status updates"""
     html_code = f"""
     <span style="font-size:14px; color: grey; font-weight: normal; animation: blinker 1.5s step-start infinite;">
         {text}
@@ -269,34 +274,48 @@ def main():
         # Configuration options
         st.subheader("Configuration")
         
+        # LLM Provider Selection
+        st.write("**LLM Provider**")
+        provider_options = ["ollama", "openai", "anthropic"]
+        current_provider = config.get("llm", {}).get("provider", "ollama")
+        
+        selected_provider = st.selectbox(
+            "Provider:",
+            provider_options,
+            index=provider_options.index(current_provider) if current_provider in provider_options else 0,
+            help="Select the LLM provider to use"
+        )
+        
+        # Update config based on provider selection
+        if selected_provider != current_provider:
+            config["llm"]["provider"] = selected_provider
+            
+            # Reset to provider-specific defaults if switching
+            if selected_provider == "ollama":
+                config["llm"]["base_url"] = "http://localhost:11434"
+                config["llm"]["model"] = "llama3.2"
+            elif selected_provider == "openai":
+                config["llm"]["model"] = "gpt-4"
+                config["llm"].pop("base_url", None)  # Remove base_url for OpenAI
+            elif selected_provider == "anthropic":
+                config["llm"]["model"] = "claude-3-sonnet"
+                config["llm"].pop("base_url", None)  # Remove base_url for Anthropic
+        
         
         # Research parameters
         st.write("**Parameters**")
         max_sources = st.slider("Max Sources", 5, 50, 10)
         temperature = st.slider("LLM Temperature", 0.0, 1.0, 0.7)
         
-        config["temperature"] = temperature
+        # Update config with UI parameters
+        config["llm"]["temperature"] = temperature
         config["max_sources"] = max_sources
         config['logging']['level'] = "ERROR"
         
-        st.markdown("---")
-        
-        # Research history
-        st.subheader("Research History")
-        if st.session_state.research_history:
-            for i, query in enumerate(st.session_state.research_history[-5:], 1):
-                if st.button(f"{i}. {query[:30]}...", key=f"history_{i}"):
-                    st.session_state.current_query = query
-        else:
-            st.write("No previous research")
-        
-        if st.button("Clear History"):
-            st.session_state.research_history = []
-            st.rerun()
     
     # Main content area
     st.title("Research Assistant Agent")
-    st.markdown("*Comprehensive research across all domains with AI-powered analysis*")
+    st.markdown("*AI-powered research leveraging the latest information through web search*")
 
     
     # Query input
@@ -342,9 +361,24 @@ def conduct_research(query: str, config: Dict[str, Any]):
         status_text.html(blinking_text("Initializing research agent..."))
         progress_bar.progress(10)
         
-        # Initialize research agent
-        agent = ResearchAgentGraph(config, status_handler=status_handler)
-        st.session_state.research_agent = agent
+        # Initialize research agent with enhanced error handling
+        try:
+            agent = ResearchAgentGraph(config, status_handler=status_handler)
+            st.session_state.research_agent = agent
+            
+            # Show provider information
+            st.info(f"✓ Initialized with {agent.llm_provider.provider_name.title()} provider")
+            
+        except ImportError as e:
+            st.error("❌ Missing dependencies for refactored implementation")
+            st.error(f"Error: {str(e)}")
+            st.info("💡 Try installing missing packages or check your environment")
+            return
+        except Exception as e:
+            st.error("❌ Failed to initialize research agent")
+            st.error(f"Error: {str(e)}")
+            st.info("💡 Check your configuration and ensure the LLM service is running")
+            return
 
         
         # Execute until interrupt (human review)
@@ -361,19 +395,33 @@ def conduct_research(query: str, config: Dict[str, Any]):
                 return
             
         except Exception as e:
-            # If using thread-based execution, the graph might be interrupted
-            # Check if we're at the human review step
-            try:
-                current_state = agent.get_current_state(st.session_state.thread_id)
-                if current_state.get("human_review_required", False):
-                    st.session_state.awaiting_human_review = True
-                    status_text.text("Research plan generated. Please review below.")
-                    st.rerun()
-                    return
-                else:
-                    raise e
-            except:
-                raise e
+            # Enhanced error handling for the refactored implementation
+            if "interrupt" in str(e).lower() or "human_review" in str(e).lower():
+                # This is expected - workflow interrupted for human review
+                try:
+                    current_state = agent.get_current_state(st.session_state.thread_id)
+                    if current_state.get("human_review_required", False):
+                        st.session_state.awaiting_human_review = True
+                        status_text.text("Research plan generated. Please review below.")
+                        st.rerun()
+                        return
+                except Exception as state_error:
+                    logger.error(f"Error getting current state: {state_error}")
+            
+            # Handle other errors
+            logger.error(f"Research execution error: {e}")
+            status_text.error(f"Research failed: {str(e)}")
+            st.error(f"Research execution failed: {str(e)}")
+            
+            # Provide helpful suggestions based on error type
+            if "provider" in str(e).lower() or "llm" in str(e).lower():
+                st.info("💡 Try switching LLM providers or checking your configuration")
+            elif "import" in str(e).lower():
+                st.info("💡 Some dependencies may be missing. Check your environment setup.")
+            elif "connection" in str(e).lower() or "network" in str(e).lower():
+                st.info("💡 Check your network connection and LLM service availability")
+            
+            return
         
         
         # Store results

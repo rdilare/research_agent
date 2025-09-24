@@ -18,8 +18,8 @@ class ReportPlan(BaseModel):
 
 class SectionContent(BaseModel):
     """Model for generated section content"""
-    section_title: str = Field(..., description="Title of the section")
-    content: str = Field(..., description="Generated content for the section")
+    section_title: str = Field(default="", description="Title of the section")
+    content: str = Field(default="", description="Generated content for the section") 
     sources_used: Optional[List[str]] = Field(default_factory=list, description="List of sources or queries used")
 
 

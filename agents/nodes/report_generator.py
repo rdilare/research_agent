@@ -3,8 +3,6 @@ Report Generator Node - creates the final research report based on the approved 
 """
 import logging
 from typing import Dict, Any
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
 
 from .base_node import BaseNode
 from ..state_manager import AgentState, StateManager
@@ -78,47 +76,47 @@ class ReportGeneratorNode(BaseNode):
         sub_queries = section.get("sub_queries", [])
         
         # Gather information for all sub-queries
-        combined_snippets = self._gather_section_information(sub_queries)
+        section_context = self._gather_section_context(sub_queries)
         
         # Try structured generation first
         try:
-            content = self._generate_structured_content(combined_snippets, title, report_title)
-            return content if content else self._generate_fallback_content(combined_snippets, title, report_title)
+            content = self._generate_structured_content(section_context, title, report_title)
+            return content if content else self._generate_fallback_content(section_context, title, report_title)
         except JSONDecodingError as e:
             logger.warning(f"JSON decoding failed for section '{title}': {e}")
             # Fall back to direct text generation
-            return self._generate_fallback_content(combined_snippets, title, report_title)
+            return self._generate_fallback_content(section_context, title, report_title)
         except Exception as e:
             logger.warning(f"Structured content generation failed for section '{title}': {e}")
             # Try fallback method
             try:
-                return self._generate_fallback_content(combined_snippets, title, report_title)
+                return self._generate_fallback_content(section_context, title, report_title)
             except Exception as fallback_error:
                 logger.error(f"Both structured and fallback generation failed for '{title}': {fallback_error}")
                 return f"Unable to generate content for section: {title}. Please check the LLM configuration and connectivity."
     
-    def _gather_section_information(self, sub_queries: list) -> str:
+    def _gather_section_context(self, sub_queries: list) -> str:
         """Gather information from web search for section sub-queries"""
-        combined_snippets = ""
+        section_context = ""
         
         for sub_query in sub_queries:
             try:
                 web_results = self.web_search_tool.run(sub_query)
                 snippets = [result.get("snippet", "") for result in web_results if result.get("snippet")]
-                combined_snippets += "\n".join(snippets) + "\n\n"
+                section_context += "\n".join(snippets) + "\n\n"
             except Exception as e:
                 logger.warning(f"Web search failed for sub-query '{sub_query}': {e}")
         
-        return combined_snippets
+        return section_context
     
-    def _generate_structured_content(self, snippets: str, section_heading: str, topic: str) -> str:
+    def _generate_structured_content(self, section_context: str, section_heading: str, topic: str) -> str:
         """Generate content using JSON-constrained decoding"""
         prompt_template = """
-        Based on the following snippets, generate detailed and coherent section content for the below
+        Based on the following section-context, generate detailed and coherent section content for the below
         section heading and research topic. The content should be comprehensive and informative. 
         The content should be 200-300 words long, written in natural language, and in paragraph form.
 
-        Snippets: {snippets}
+        Section Context: {section_context}
         Section Heading: {section_heading}
         Research Topic: {topic}
 
@@ -136,7 +134,7 @@ class ReportGeneratorNode(BaseNode):
         )
         
         prompt_text = prompt_template.format(
-            snippets=snippets,
+            section_context=section_context,
             section_heading=section_heading,
             topic=topic,
             format_instructions=self.section_content_parser.get_format_instructions()
@@ -154,14 +152,14 @@ class ReportGeneratorNode(BaseNode):
         # Ensure we return something meaningful
         return content if content.strip() else f"Can not generated content for section: {section_heading}"
     
-    def _generate_fallback_content(self, snippets: str, section_heading: str, topic: str) -> str:
+    def _generate_fallback_content(self, section_context: str, section_heading: str, topic: str) -> str:
         """Generate content using standard text generation as fallback"""
         prompt_template = """
-        Based on the following snippets, generate detailed and coherent section content for the below
+        Based on the following section-context, generate detailed and coherent section content for the below
         section heading and research topic. The content should be comprehensive and informative. 
         The content should be 200-300 words long, written in natural language, and in paragraph form.
 
-        Snippets: {snippets}
+        Section Context: {section_context}
         Section Heading: {section_heading}
         Research Topic: {topic}
 
@@ -170,7 +168,7 @@ class ReportGeneratorNode(BaseNode):
         
         # Format the prompt manually
         formatted_prompt = prompt_template.format(
-            snippets=snippets,
+            section_context=section_context,
             section_heading=section_heading,
             topic=topic
         )

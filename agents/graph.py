@@ -13,8 +13,7 @@ import logging
 
 # LangChain imports (with error handling for missing dependencies)
 try:
-    from langchain_community.tools import DuckDuckGoSearchResults
-    LANGCHAIN_AVAILABLE = True
+        LANGCHAIN_AVAILABLE = True
 except ImportError:
     LANGCHAIN_AVAILABLE = False
     
@@ -29,6 +28,7 @@ from .llm_providers import LLMProviderFactory, create_llm_provider
 from .state_manager import AgentState, StateManager
 from .graph_builder import ResearchWorkflowFactory
 from .nodes import ReportPlannerNode, HumanReviewNode, ReportGeneratorNode
+from .tools.web_search_tool import WebSearchTool
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +105,7 @@ class ResearchAgentGraph:
     def _initialize_web_search(self):
         """Initialize web search tool"""
         try:
-            return DuckDuckGoSearchResults(max_results=5, output_format="list")
+            return WebSearchTool(max_results=5)
         except Exception as e:
             logger.error(f"Failed to initialize web search tool: {e}")
             raise

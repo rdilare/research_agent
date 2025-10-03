@@ -157,6 +157,7 @@ class ResearchWorkflowFactory:
         config: Dict[str, Any],
         llm_provider,
         web_search_tool,
+        rag_tool,
         status_handler=None
     ) -> StateGraph:
         """Create the standard research agent workflow"""
@@ -189,6 +190,7 @@ class ResearchWorkflowFactory:
             dependencies={
                 "llm_provider": llm_provider,
                 "web_search_tool": web_search_tool,
+                "rag_tool": rag_tool,
                 "status_handler": status_handler
             }
         )

@@ -2,9 +2,7 @@
 Report Generator Node - creates the final research report based on the approved plan
 """
 import logging
-from typing import Dict, Any
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import StrOutputParser
+from typing import Dict, Any, List
 
 from .base_node import BaseNode
 from ..state_manager import AgentState, StateManager
@@ -17,10 +15,13 @@ logger = logging.getLogger(__name__)
 class ReportGeneratorNode(BaseNode):
     """Node responsible for generating the final report based on the plan"""
     
-    def __init__(self, config: Dict[str, Any], llm_provider, web_search_tool, status_handler=None):
+    def __init__(self, config: Dict[str, Any], llm_provider, web_search_tool, rag_tool, status_handler=None):
         super().__init__(config, status_handler)
         self.llm_provider = llm_provider
         self.web_search_tool = web_search_tool
+        self.rag_tool = rag_tool
+
+        self.retrieved_docs: List[str] = []
         
         # Initialize JSON-constrained parser for section content
         self.section_content_parser = self._create_section_parser()
@@ -51,6 +52,9 @@ class ReportGeneratorNode(BaseNode):
             StateManager.add_error(state, error_msg)
             state["generated_report"] = "# Research Report\n\nError generating report."
         
+        state["retrieved_docs"] = self.retrieved_docs
+        self.retrieved_docs = []
+
         return state
     
     def _generate_full_report(self, state: AgentState) -> str:
@@ -74,51 +78,96 @@ class ReportGeneratorNode(BaseNode):
     
     def _generate_section_content(self, section: Dict[str, Any], report_title: str) -> str:
         """Generate content for a single report section"""
-        title = section.get("title", "Untitled Section")
+        section_heading = section.get("title", "Untitled Section")
         sub_queries = section.get("sub_queries", [])
         
         # Gather information for all sub-queries
-        combined_snippets = self._gather_section_information(sub_queries)
+        web_results = self._gather_web_results(sub_queries)
+        section_context = self._gather_section_context(web_results, section_heading, report_title)
+
+        self.retrieved_docs.append({"section heading": section_heading, "section_context": section_context})
         
         # Try structured generation first
         try:
-            content = self._generate_structured_content(combined_snippets, title, report_title)
-            return content if content else self._generate_fallback_content(combined_snippets, title, report_title)
+            content = self._generate_structured_content(section_context, section_heading, report_title)
+            return content if content else self._generate_fallback_content(section_context, section_heading, report_title)
         except JSONDecodingError as e:
-            logger.warning(f"JSON decoding failed for section '{title}': {e}")
+            logger.warning(f"JSON decoding failed for section '{section_heading}': {e}")
             # Fall back to direct text generation
-            return self._generate_fallback_content(combined_snippets, title, report_title)
+            return self._generate_fallback_content(section_context, section_heading, report_title)
         except Exception as e:
-            logger.warning(f"Structured content generation failed for section '{title}': {e}")
+            logger.warning(f"Structured content generation failed for section '{section_heading}': {e}")
             # Try fallback method
             try:
-                return self._generate_fallback_content(combined_snippets, title, report_title)
+                return self._generate_fallback_content(section_context, section_heading, report_title)
             except Exception as fallback_error:
-                logger.error(f"Both structured and fallback generation failed for '{title}': {fallback_error}")
-                return f"Unable to generate content for section: {title}. Please check the LLM configuration and connectivity."
+                logger.error(f"Both structured and fallback generation failed for '{section_heading}': {fallback_error}")
+                return f"Unable to generate content for section: {section_heading}. Please check the LLM configuration and connectivity."
     
-    def _gather_section_information(self, sub_queries: list) -> str:
-        """Gather information from web search for section sub-queries"""
-        combined_snippets = ""
+    def _gather_web_results(self, sub_queries: list) -> list[str]:
+        """Gather information using web search and RAG for section sub-queries"""
+        all_documents = []
         
+        # Reset RAG tool's vector store for fresh content
+        self.rag_tool.reset_vector_store()
         for sub_query in sub_queries:
             try:
-                web_results = self.web_search_tool.run(sub_query)
-                snippets = [result.get("snippet", "") for result in web_results if result.get("snippet")]
-                combined_snippets += "\n".join(snippets) + "\n\n"
+                # Use search_and_fetch to get full content from web results
+                web_results = self.web_search_tool.search_and_fetch(sub_query, fetch_content=True)
+                
+                # Extract documents from web results
+                for result in web_results:
+                    if result.get('documents'):
+                        # Add document content to the list
+                        all_documents.extend([doc.page_content for doc in result['documents']])
+            
             except Exception as e:
-                logger.warning(f"Web search failed for sub-query '{sub_query}': {e}")
-        
-        return combined_snippets
+                logger.warning(f"Web search and fetch failed for sub-query '{sub_query}': {e}")
+        return all_documents
     
-    def _generate_structured_content(self, snippets: str, section_heading: str, topic: str) -> str:
+    def _gather_section_context(
+            self, documents: list[str], 
+            section_heading: str, 
+            research_topic: str
+    ) -> str:
+        
+        all_documents = documents
+        if not all_documents:
+            logger.warning("No documents retrieved from web search")
+            return ""
+        
+        try:
+            # Create vector store from all gathered documents
+            self.rag_tool.create_vector_store(all_documents)
+            
+            # Use section heading as query to get most relevant documents
+            rag_query = f"Find content related to the section heading '{section_heading}' and the research topic '{research_topic}'."
+            relevant_docs = self.rag_tool.query_documents(rag_query, top_k=3)
+
+            # Combine relevant documents into context
+            section_context = "\n\n".join([doc.page_content for doc in relevant_docs])
+            return section_context
+            
+        except Exception as e:
+            logger.error(f"RAG processing failed: {e}")
+            # Fallback to using all documents if RAG fails
+            return "\n\n".join(all_documents[:3])  # Limit to first 3 documents as fallback
+    
+    def _generate_structured_content(self, section_context: str, section_heading: str, topic: str) -> str:
         """Generate content using JSON-constrained decoding"""
         prompt_template = """
-        Based on the following snippets, generate detailed and coherent section content for the below
-        section heading and research topic. The content should be comprehensive and informative. 
-        The content should be 200-300 words long, written in natural language, and in paragraph form.
+        Based on the following highly relevant section context retrieved using RAG, generate detailed and coherent 
+        section content for the given section heading and research topic. Focus on using the key information and 
+        insights from the RAG-retrieved content.
 
-        Snippets: {snippets}
+        The content should be:
+        - Comprehensive and informative
+        - the generated content should be 200-300 words in length
+        - Written in natural language with clear paragraph structure
+        - Directly related to the section heading and research topic
+        - Supported by the provided section-context
+
+        Section Context : {section_context}
         Section Heading: {section_heading}
         Research Topic: {topic}
 
@@ -136,7 +185,7 @@ class ReportGeneratorNode(BaseNode):
         )
         
         prompt_text = prompt_template.format(
-            snippets=snippets,
+            section_context=section_context,
             section_heading=section_heading,
             topic=topic,
             format_instructions=self.section_content_parser.get_format_instructions()
@@ -154,14 +203,21 @@ class ReportGeneratorNode(BaseNode):
         # Ensure we return something meaningful
         return content if content.strip() else f"Can not generated content for section: {section_heading}"
     
-    def _generate_fallback_content(self, snippets: str, section_heading: str, topic: str) -> str:
+    def _generate_fallback_content(self, section_context: str, section_heading: str, topic: str) -> str:
         """Generate content using standard text generation as fallback"""
         prompt_template = """
-        Based on the following snippets, generate detailed and coherent section content for the below
-        section heading and research topic. The content should be comprehensive and informative. 
-        The content should be 200-300 words long, written in natural language, and in paragraph form.
+        Based on the following highly relevant section context retrieved using RAG, generate detailed and coherent 
+        content for the given section heading and research topic. Focus on using the key information and insights 
+        from the RAG-retrieved content.
 
-        Snippets: {snippets}
+        The content should be:
+        - Comprehensive and informative
+        - 200-300 words in length
+        - Written in natural language with clear paragraph structure
+        - Directly related to the section heading and research topic
+        - Supported by the provided section-context
+
+        Section Context : {section_context}
         Section Heading: {section_heading}
         Research Topic: {topic}
 
@@ -170,7 +226,7 @@ class ReportGeneratorNode(BaseNode):
         
         # Format the prompt manually
         formatted_prompt = prompt_template.format(
-            snippets=snippets,
+            section_context=section_context,
             section_heading=section_heading,
             topic=topic
         )

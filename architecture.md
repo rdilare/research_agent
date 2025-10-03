@@ -23,6 +23,7 @@
 - **State Management** - Centralized state validation and manipulation
 - **Configuration-Driven** - YAML-based workflow and provider configuration
 - **Enhanced UI** - Streamlit interface with provider selection and workflow info
+- **RAG Integration** - Retrieval Augmented Generation with vector store and web search capabilities
 
 ---
 
@@ -71,6 +72,8 @@
 - **Frontend:** Enhanced Streamlit UI with provider selection
 - **Data Validation:** Pydantic for type safety and validation
 - **Design Patterns:** Factory, Strategy, Builder, Observer patterns
+- **RAG System:** Chroma vector store with Ollama embeddings for semantic search
+- **Web Search:** DuckDuckGo integration with content cleaning and chunking
 
 ---
 
@@ -332,7 +335,11 @@ research_agent/
 ## Future Extensions
 
 ### Planned Enhancements
-- **Advanced RAG:** Vector database integration with semantic search
+- **Advanced RAG Features:** 
+  - Multi-model embedding support
+  - Cross-document reasoning
+  - Automated source validation
+  - Enhanced text preprocessing pipelines
 - **Caching Layer:** Response and state caching for efficiency
 - **Tool Calling:** Integration with graph generation for data analysis
 - **Advanced Monitoring:** Comprehensive logging and metrics collection

@@ -19,3 +19,5 @@ typing-extensions>=4.5.0
 weasyprint>=60.0
 markdown>=3.5.0
 markdown-pdf>=0.1.8
+langchain_openai>=0.1.0
+chromadb>=0.4.0

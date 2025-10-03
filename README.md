@@ -13,6 +13,7 @@ A scalable research assistant with **modular architecture** supporting multiple 
 - **Structured Generation** - JSON-constrained llm output for reliability
 - **Web Interface** - Streamlit UI for easy interaction
 - **Configuration-Driven** - YAML-based workflow management
+- **RAG Integration** - Retrieval-augmented generation with Chroma vector store
 
 ### Agent Graph
 ![Agent Graph](docs/agent_graph.png)
@@ -25,17 +26,21 @@ A scalable research assistant with **modular architecture** supporting multiple 
    pip install -r requirements.txt
    ```
 
-2. **Setup LLM Provider:**
+2. **Setup LLM Provider and RAG:**
    ```bash
    # For Ollama (default)
    ollama serve
    ollama pull llama3.2
+   ollama pull nomic-embed-text  # for RAG embeddings
    
    # For OpenAI (coming soon)
    export OPENAI_API_KEY="your-key"
    
    # For Anthropic (coming soon)  
    export ANTHROPIC_API_KEY="your-key"
+   
+   # Create vector store directory
+   mkdir -p data/vectorstore
    ```
 
 3. **Run the application:**
@@ -54,6 +59,7 @@ llm_provider:
 ollama:
   model: "llama3.2"
   base_url: "http://localhost:11434"
+  embeddings_model: "nomic-embed-text"  # for RAG
   
 openai:
   model: "gpt-4"
@@ -62,6 +68,12 @@ openai:
 anthropic:
   model: "claude-3-sonnet"
   temperature: 0.7
+
+rag:
+  vector_store: "chroma"
+  persist_directory: "data/vectorstore"
+  chunk_size: 1000
+  chunk_overlap: 100
 
 workflow:
   enable_human_review: true
@@ -73,16 +85,24 @@ workflow:
 ```python
 from agents.nodes.base_node import BaseNode
 
+# Example analysis node with RAG integration
 class CustomAnalysisNode(BaseNode):
     def __init__(self, llm_provider):
         super().__init__(
             name="custom_analysis",
             llm_provider=llm_provider
         )
+        self.rag_tool = RAGTool()  # Initialize RAG capabilities
     
     def execute(self, state):
-        # Your custom logic here
-        return {"custom_results": "analysis_data"}
+        # Create vector store from research data
+        self.rag_tool.create_vector_store(state["research_data"])
+        
+        # Query relevant content
+        context = self.rag_tool.query_documents(state["query"])
+        
+        # Analyze with context-aware LLM
+        return {"analysis_results": self._analyze_with_context(context)}
 ```
 
 ### Extending the System

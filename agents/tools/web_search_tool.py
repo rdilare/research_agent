@@ -11,6 +11,34 @@ from langchain_core.documents import Document
 
 logger = logging.getLogger(__name__)
 
+def clean_web_text(text: str) -> str:
+    """Clean web scraped text by removing excessive whitespace and formatting.
+    
+    Args:
+        text: Raw scraped text
+        
+    Returns:
+        Cleaned text with normalized spacing
+    """
+    import re
+    
+    # Replace all forms of whitespace (spaces, tabs, etc) with single space
+    text = re.sub(r'\s+', ' ', text)
+    
+    # Normalize newlines - replace multiple with single
+    text = re.sub(r'\n\s*\n+', '\n\n', text)
+    
+    # Remove spaces around newlines
+    text = re.sub(r'\s*\n\s*', '\n', text)
+    
+    # Remove leading/trailing whitespace from each line
+    text = '\n'.join(line.strip() for line in text.split('\n'))
+    
+    # Remove empty lines
+    text = '\n'.join(line for line in text.split('\n') if line)
+    
+    return text.strip()
+
 class WebSearchTool:
     """A tool for web searching and content fetching using LangChain components"""
     
@@ -86,8 +114,16 @@ class WebSearchTool:
                 logger.warning(f"No content retrieved from {url}")
                 return None
             
-            # Split content into chunks
-            chunks = self.text_splitter.split_documents(docs)
+            # Clean and split content into chunks
+            cleaned_docs = []
+            for doc in docs:
+                cleaned_text = clean_web_text(doc.page_content)
+                cleaned_docs.append(Document(
+                    page_content=cleaned_text,
+                    metadata=doc.metadata
+                ))
+            
+            chunks = self.text_splitter.split_documents(cleaned_docs)
             
             # Extract metadata from the first document
             metadata = chunks[0].metadata if chunks else {}

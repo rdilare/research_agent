@@ -27,8 +27,9 @@ except ImportError:
 from .llm_providers import LLMProviderFactory, create_llm_provider
 from .state_manager import AgentState, StateManager
 from .graph_builder import ResearchWorkflowFactory
-from .nodes import ReportPlannerNode, HumanReviewNode, ReportGeneratorNode
+# from .nodes import ReportPlannerNode, HumanReviewNode, ReportGeneratorNode
 from .tools.web_search_tool import WebSearchTool
+from .tools.rag_tool import RAGTool
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,12 @@ class ResearchAgentGraph:
         
         # Initialize tools
         self.web_search_tool = self._initialize_web_search()
+        
+        # Initialize RAG tool with the same model as LLM provider
+        llm_config = self.config.get('llm', {})
+        base_url = llm_config.get('base_url', 'http://localhost:11434')
+        embed_model_name = "nomic-embed-text"
+        self.rag_tool = RAGTool(model_name=embed_model_name, base_url=base_url)
         
         # Build the workflow graph
         self.graph = self._build_workflow()
@@ -117,6 +124,7 @@ class ResearchAgentGraph:
                 config=self.config,
                 llm_provider=self.llm_provider,
                 web_search_tool=self.web_search_tool,
+                rag_tool=self.rag_tool,
                 status_handler=self.status_handler
             )
         except Exception as e:
@@ -221,6 +229,10 @@ class ResearchAgentGraph:
             
             # Continue execution from where it left off
             final_result = self.graph.invoke(None, config)
+
+            # Debug logging
+            with open("debug_log.log", "w") as f:
+                f.write(str(final_result))
             
             return final_result
             

@@ -38,9 +38,6 @@ A scalable research assistant with **modular architecture** supporting multiple 
    
    # For Anthropic (coming soon)  
    export ANTHROPIC_API_KEY="your-key"
-   
-   # Create vector store directory
-   mkdir -p data/vectorstore
    ```
 
 3. **Run the application:**
@@ -85,24 +82,16 @@ workflow:
 ```python
 from agents.nodes.base_node import BaseNode
 
-# Example analysis node with RAG integration
 class CustomAnalysisNode(BaseNode):
     def __init__(self, llm_provider):
         super().__init__(
             name="custom_analysis",
             llm_provider=llm_provider
         )
-        self.rag_tool = RAGTool()  # Initialize RAG capabilities
     
     def execute(self, state):
-        # Create vector store from research data
-        self.rag_tool.create_vector_store(state["research_data"])
-        
-        # Query relevant content
-        context = self.rag_tool.query_documents(state["query"])
-        
-        # Analyze with context-aware LLM
-        return {"analysis_results": self._analyze_with_context(context)}
+        # Your custom logic here
+        return {"custom_results": "analysis_data"}
 ```
 
 ### Extending the System
